@@ -1,0 +1,4 @@
+# 桌面版（宿主成长系统.pyw）需要；浏览器版（server.py）仅用标准库，无需安装任何东西。
+pywebview>=4.4
+# 任务发布提醒（notifier.py）在 Windows 上弹原生 toast
+winotify>=1.1; sys_platform == "win32"

@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>宿主成长系统</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body data-theme="light">
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">⬢</div>
+      <div><div class="brand-name">宿主成长系统</div><div class="brand-sub">系统流 · 个人成长面板</div></div>
+    </div>
+    <nav class="nav">
+      <button class="nav-btn" data-page="today" aria-selected="true"><span class="nav-sym">◉</span>今日<span class="nav-badge" id="navToday" hidden></span></button>
+      <button class="nav-btn" data-page="shop"><span class="nav-sym">◈</span>商城</button>
+      <button class="nav-btn" data-page="log"><span class="nav-sym">▤</span>公告</button>
+      <button class="nav-btn" data-page="data"><span class="nav-sym">▦</span>数据</button>
+      <button class="nav-btn" data-page="settings"><span class="nav-sym">⚙</span>设置</button>
+    </nav>
+    <div class="side-foot">系统把你的成长量化为等级、金币与四维属性。<br>数据存于本机与项目 data 目录。</div>
+  </aside>
+
+  <main class="main">
+    <div class="content">
+
+      <section class="page" id="page-today">
+        <div class="page-head">
+          <div><h1 class="page-title" id="greeting">你好，宿主</h1>
+            <p class="page-desc" id="greetSub"></p></div>
+          <span class="chip chip-accent mono-num">◈ <b id="hCoins">0</b>&nbsp;金币</span>
+        </div>
+        <section class="hero">
+          <div class="ring-wrap">
+            <svg class="ring-svg" viewBox="0 0 220 220">
+              <circle class="ring-track" cx="110" cy="110" r="100" fill="none" stroke-width="14"></circle>
+              <circle class="ring-seg" id="ringSeg" cx="110" cy="110" r="100" fill="none" stroke-width="14"
+                stroke-linecap="round" transform="rotate(-90 110 110)" stroke-dasharray="0 628.32"></circle>
+            </svg>
+            <div class="ring-center"><div class="ring-pct" id="ringPct">0%</div><div class="ring-cap" id="ringCap"></div></div>
+          </div>
+          <div class="host-panel">
+            <div class="host-line"><span class="host-name" id="hName">宿主</span>
+              <span class="chip chip-title" id="hTitle" hidden></span>
+              <span class="chip chip-accent" id="hLv">Lv.1</span>
+              <span class="host-exp mono-num muted" id="hExp"></span></div>
+            <div class="bar"><i id="hExpBar" style="width:0%"></i></div>
+            <div class="attrs" id="hAttrs"></div>
+            <div class="host-stats" id="hStats"></div>
+          </div>
+        </section>
+        <section class="card card-quest">
+          <div class="card-head"><h2 class="card-title" id="mqTitle">主线任务</h2><span class="card-no" id="mqNo">MAIN QUEST</span></div>
+          <p class="card-sub" id="mqDesc"></p>
+          <div class="bar"><i id="mqBar" style="width:0%"></i></div>
+          <div class="mq-foot"><span class="mono-num" id="mqProg"></span><span id="mqMile"></span></div>
+        </section>
+        <p class="blessing" id="blessingBar" hidden></p>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">当前任务</h2><span class="card-no" id="tProgress"></span></div>
+          <p class="card-sub">系统在活跃窗口内不定时发布任务；突发限时任务奖励 ×2，超时未响应会被收回。</p>
+          <div id="taskList"></div>
+        </section>
+      </section>
+
+      <section class="page" id="page-shop" hidden>
+        <div class="page-head">
+          <div><h1 class="page-title">兑换商城</h1><p class="page-desc">金币兑换你为自己设定的现实奖励。</p></div>
+        </div>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">奖励清单</h2><span class="card-no">SHOP</span></div>
+          <div id="shopList"></div>
+          <div class="add-row">
+            <input name="n" id="shopName" placeholder="奖励名称，如：看一场电影">
+            <input name="c" id="shopCost" placeholder="价格" type="number" min="1">
+            <button class="btn" data-act="shopAdd">上架</button>
+          </div>
+        </section>
+      </section>
+
+      <section class="page" id="page-log" hidden>
+        <div class="page-head">
+          <div><h1 class="page-title">系统公告</h1><p class="page-desc">任务发布、完成与失效的完整记录。</p></div>
+        </div>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">公告栏</h2><span class="card-no">LOG</span></div>
+          <div class="log-list" id="logList"></div>
+        </section>
+      </section>
+
+      <section class="page" id="page-data" hidden>
+        <div class="page-head">
+          <div><h1 class="page-title">成长数据</h1><p class="page-desc">坚持的轨迹与属性成长趋势。</p></div>
+        </div>
+        <div class="stat-tiles" id="dataTiles"></div>
+        <p class="balance-hint" id="balanceHint" hidden></p>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">近 7 日</h2><span class="card-no">WEEKLY</span></div>
+          <p class="card-sub">每天完成数 / 已发布数，柱高为当日完成率。</p>
+          <div class="week-bars" id="weekBars"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">月度热力图</h2><span class="card-no">HEATMAP</span></div>
+          <p class="card-sub">最近 12 周，每格一天，颜色越深当天完成率越高。鼠标悬停看明细。</p>
+          <div id="heatBox"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">成就</h2><span class="card-no" id="achHead"></span></div>
+          <div class="ach-list" id="achList"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">属性突破</h2><span class="card-no">RANK UPS</span></div>
+          <p class="card-sub">属性跨过等级线的那一刻会系统公告，这里保留完整记录。</p>
+          <div id="rankList"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">任务池采用情况</h2><span class="card-no">POOL</span></div>
+          <p class="card-sub">池里的任务有没有被真正采用？这里给出答案，避免任务池变成只进不出的黑洞。</p>
+          <div id="poolStats"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">四维成长曲线</h2><span class="card-no">TREND</span></div>
+          <div id="curveBox"></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">系统周报</h2><span class="card-no">REPORT</span></div>
+          <p class="card-sub">AI 基于近 7 天数据生成评估与下周建议。</p>
+          <div id="reportBox"></div>
+          <div style="margin-top:14px"><button class="btn btn-primary" data-act="report">生成系统周报</button></div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">复盘对话</h2><span class="card-no">REVIEW CHAT</span></div>
+          <p class="card-sub">就周报和近期数据向系统追问，如「为什么我周末总崩」。所有数字由本地统计给定，系统不会编造。</p>
+          <div class="chat-box" id="chatBox" aria-live="polite"></div>
+          <div class="chat-offline" id="chatOffline" hidden>⬡ 系统神经链路离线（Magpie 网关未响应），复盘对话暂不可用。任务发布与周报的离线降级不受影响。</div>
+          <div class="chat-input-row">
+            <input id="chatInput" placeholder="向系统追问，Enter 发送…" maxlength="500">
+            <button class="btn btn-primary" data-act="chatSend" id="chatSendBtn">发送</button>
+            <button class="btn btn-sm btn-quiet" data-act="chatClear" id="chatClearBtn" title="清空对话历史">清空</button>
+          </div>
+        </section>
+      </section>
+
+      <section class="page" id="page-settings" hidden>
+        <div class="page-head">
+          <div><h1 class="page-title">系统设置</h1><p class="page-desc">宿主档案、主题外观与 AI 接入。</p></div>
+        </div>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">宿主档案</h2><span class="card-no">HOST</span></div>
+          <div class="form-grid">
+            <div class="field"><label>宿主名</label><input id="sName"></div>
+            <div class="field"><label>主题背景</label><select id="sTheme">
+              <option value="light">晨白（默认，学循同款）</option>
+              <option value="dark">深空（暗色）</option>
+              <option value="auto">跟随系统</option>
+            </select></div>
+            <div class="field wide"><label>成长目标</label><textarea id="sGoal"></textarea></div>
+            <div class="field"><label>系统语气</label><select id="sTone">
+              <option value="cool">冷酷（默认，公事公办）</option>
+              <option value="sharp">毒舌（扎心但有效）</option>
+              <option value="warm">温和（鼓励为主）</option>
+              <option value="funny">逗比（沙雕欢乐）</option>
+            </select></div>
+            <div class="field"><label>佩戴称号</label><select id="sTitle">
+              <option value="">（不佩戴）</option>
+            </select></div>
+            <div class="field wide"><label>主线任务</label>
+              <div class="mq-edit">
+                <input id="mqEditTitle" placeholder="主线名称，如：三十天筑基">
+                <input id="mqEditTarget" type="number" min="3" max="999" placeholder="目标完成数">
+                <button class="btn btn-sm" data-act="mqSave">设定主线</button>
+              </div></div>
+            <div class="field wide"><label>活跃窗口（任务只在此窗口内随机发布）</label>
+              <div style="display:flex;gap:10px;align-items:center">
+                <input id="sDayStart" type="time"> — <input id="sDayEnd" type="time">
+              </div></div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">AI 接入</h2><span class="card-no">GATEWAY</span></div>
+          <p class="card-sub">任务由本地 Magpie 网关的 AI 动态生成；网关离线时自动降级为内置任务池，不会中断。</p>
+          <div class="form-grid">
+            <div class="field"><label>网关地址</label><input id="sApi" class="mono-num"></div>
+            <div class="field"><label>API Key</label><input id="sKey" class="mono-num"></div>
+            <div class="field wide"><label>模型</label><input id="sModel" class="mono-num"></div>
+            <div class="field wide"><button class="btn btn-sm" data-act="testApi">测试连接</button></div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">任务池</h2><span class="card-no">POOL</span></div>
+          <p class="card-sub">预设你想反复做的任务：AI 出题优先采用，网关离线时降级池也优先使用它们。</p>
+          <div id="poolList"></div>
+          <div class="add-row">
+            <input name="pt" id="poolTitle" placeholder="任务标题，如：写 200 字复盘">
+            <select id="poolCat" style="flex:0 0 84px"><option>体质</option><option>智力</option><option>精神</option><option>自律</option></select>
+            <select id="poolDiff" style="flex:0 0 84px"><option value="1">难度 ★</option><option value="2" selected>难度 ★★</option><option value="3">难度 ★★★</option></select>
+            <input name="pc" id="poolMin" type="number" min="5" max="120" placeholder="分钟" style="flex:0 0 76px">
+            <button class="btn" data-act="poolAdd">加入</button>
+          </div>
+          <div style="margin-top:16px;padding-top:14px;border-top:1px dashed var(--border)">
+            <label for="poolBulk">批量导入（每行一条：标题 | 分类 | 难度 | 分钟，后三项可省略）</label>
+            <textarea id="poolBulk" placeholder="背 20 个单词 | 智力 | 2 | 20&#10;快走 20 分钟 | 体质"></textarea>
+            <div class="add-row">
+              <button class="btn btn-sm" data-act="poolBulkImport">导入这些行</button>
+              <button class="btn btn-sm btn-quiet" data-act="poolFromDone">把近 7 天完成过的任务沉淀进来</button>
+            </div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">外观与数据</h2><span class="card-no">DATA</span></div>
+          <div class="form-grid">
+            <div class="field wide check-line"><input type="checkbox" id="sSound"><label style="margin:0" for="sSound">任务发布 / 完成时播放"叮"</label></div>
+            <div class="field wide">
+              <button class="btn btn-sm" data-act="export">导出存档</button>
+              <button class="btn btn-sm" data-act="import">导入存档</button>
+              <button class="btn btn-sm btn-quiet" data-act="selftest">运行自检</button>
+            </div>
+          </div>
+          <p class="hint">存档保存在本机浏览器，并自动备份到项目 <span class="mono-num">data/growth.json</span>（清缓存后会自动从磁盘恢复）——换机迁移仍建议定期「导出存档」。控制台可用 <span class="mono-num">GROWTH.selftest()</span> 校验核心逻辑。</p>
+        </section>
+      </section>
+
+    </div>
+  </main>
+</div>
+<div class="toast-zone" id="toastZone"></div>
+<input type="file" id="importFile" accept=".json" style="display:none">
+
+<script src="js/core.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/state.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# 个人存档与运行时数据 —— 不发布
+data/
+server.log
+*.log
+
+# 运行时产物
+__pycache__/
+*.pyc
+.tmp/
+tmp_t/
+.alma-snapshots/
+.tb/
+
+# 系统文件
+Thumbs.db
+.DS_Store
