@@ -50,8 +50,11 @@ def _scratch_root():
     return base
 
 
-SHOT_DIR = os.path.join(_scratch_root(), "shots")
-os.makedirs(SHOT_DIR, exist_ok=True)
+def _shot_dir():
+    """截图目录：惰性创建 —— 模块级不落盘，import 本文件不该有任何副作用。"""
+    d = os.path.join(_scratch_root(), "shots")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _kill_tree(proc):
@@ -816,8 +819,8 @@ def main():
     })()""")
     A("toast 最多同时 3 条", tst == 3, tst)
 
-    shot_path = os.path.join(SHOT_DIR, "growth_e2e_data_page.png")
-    today_shot = os.path.join(SHOT_DIR, "growth_e2e_today.png")
+    shot_path = os.path.join(_shot_dir(), "growth_e2e_data_page.png")
+    today_shot = os.path.join(_shot_dir(), "growth_e2e_today.png")
     try:
         ev("showPage('data')")
         cmd("Emulation.setDeviceMetricsOverride", {"width": 1120, "height": 1400, "deviceScaleFactor": 1, "mobile": False})
@@ -831,7 +834,7 @@ def main():
         m2, _ = cmd("Page.captureScreenshot", {"format": "png"})
         open(today_shot, "wb").write(_b64.b64decode(m2["result"]["data"]))
         # 额度条截图（两种状态并排：满额 / 耗尽）
-        quota_shot = os.path.join(SHOT_DIR, "growth_e2e_quota.png")
+        quota_shot = os.path.join(_shot_dir(), "growth_e2e_quota.png")
         ev("""(()=>{
           const k=ds(new Date());
           S.days[k]={slots:[
@@ -849,7 +852,7 @@ def main():
         print("额度条截图:", quota_shot)
 
         # 耗尽态截图
-        quota_out_shot = os.path.join(SHOT_DIR, "growth_e2e_quota_out.png")
+        quota_out_shot = os.path.join(_shot_dir(), "growth_e2e_quota_out.png")
         ev("""(()=>{
           const k=ds(new Date());
           S.days[k].rescueCount=1;
@@ -862,7 +865,7 @@ def main():
         print("额度耗尽截图:", quota_out_shot)
 
         # 任务池采用情况截图
-        pool_shot = os.path.join(SHOT_DIR, "growth_e2e_pool.png")
+        pool_shot = os.path.join(_shot_dir(), "growth_e2e_pool.png")
         ev("""(()=>{
           S.taskPool=[{title:'拉伸10分钟',desc:'',category:'体质',difficulty:1,minutes:10},
                       {title:'读书20页',desc:'',category:'智力',difficulty:2,minutes:30},
@@ -883,7 +886,7 @@ def main():
         print("任务池截图:", pool_shot)
 
         # 诊断→修复按钮截图
-        wfix_shot = os.path.join(SHOT_DIR, "growth_e2e_window_fix.png")
+        wfix_shot = os.path.join(_shot_dir(), "growth_e2e_window_fix.png")
         ev("""(()=>{
           const k=ds(new Date());
           const at=t=>new Date(k+'T'+t+':00').getTime();
@@ -910,7 +913,7 @@ def main():
         print("窗口修复截图:", wfix_shot)
 
         # 周报补救复盘截图
-        rescue_shot = os.path.join(SHOT_DIR, "growth_e2e_rescue_review.png")
+        rescue_shot = os.path.join(_shot_dir(), "growth_e2e_rescue_review.png")
         ev("""(()=>{
           const k=ds(new Date());
           S.days[k]={slots:[
@@ -934,7 +937,7 @@ def main():
         print("补救复盘截图:", rescue_shot)
 
         # 周报截图：滚动到周报卡
-        rep_shot = os.path.join(SHOT_DIR, "growth_e2e_report.png")
+        rep_shot = os.path.join(_shot_dir(), "growth_e2e_report.png")
         ev("""(()=>{
           S.player.attrs={体质:2,智力:60,精神:10,自律:10};
           const m = weekMetrics(S, ds(new Date()), 7);
@@ -952,7 +955,7 @@ def main():
         print("周报截图:", rep_shot)
 
         # 属性突破卡：滚到数据页底部单独截图（它在 1400px 视口外）
-        rank_shot = os.path.join(SHOT_DIR, "growth_e2e_rank.png")
+        rank_shot = os.path.join(_shot_dir(), "growth_e2e_rank.png")
         ev("""(()=>{ S.rankUps=[{cat:'智力',rank:'D',value:96,t:Date.now()},
                         {cat:'体质',rank:'E',value:42,t:Date.now()-86400000*2}];
                 showPage('data'); renderRankTimeline();
