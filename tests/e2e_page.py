@@ -241,6 +241,49 @@ def main():
     A("成长环已渲染", st.get("ring") is not None)
     A("今日 day 记录已建立", st.get("hasDay"), st)
 
+    # ── 回归：今日计划里还有未发布任务时，成长环不能显示 100% ──
+    # 老板 2026-11-16 实际撞到的画面：计划 2 个任务，做完 1 个、另 1 个还没到点发布，
+    # 环显示 100%「今日成长环 1/1」，下方同时写着「今日 1 个任务尚未发布」。
+    # 分母只数「已发布」→ 已发布的都做完了就等于 100%，但今天并没有收工。
+    # 发布中的 AI 调用没结束前 renderTasks 会早退（generating），先等它落定，
+    # 否则下面测的是"正在推演"的中间态，不是稳态
+    for _ in range(90):
+        g, _ = ev("typeof generating!=='undefined' ? !!generating : false")
+        if g is False:
+            break
+        time.sleep(0.5)
+
+    def ring_case(statuses):
+        expr = """(()=>{
+          const k=ds(new Date());
+          const keep=S.days[k];
+          const t={title:'A',desc:'',category:'体质',difficulty:1,minutes:10,kind:'side'};
+          S.days[k]={slots:%s, tzOffset:(keep&&keep.tzOffset)};
+          renderHero(); renderTasks();
+          const out={pct:document.getElementById('ringPct').textContent,
+            cap:document.getElementById('ringCap').textContent,
+            prog:document.getElementById('tProgress').textContent,
+            // 环内文字不能撑出 240px 的环（内圈直径约 186px），否则会压在描边上
+            capW:Math.round(document.getElementById('ringCap').getBoundingClientRect().width)};
+          S.days[k]=keep; renderHero(); renderTasks();
+          return JSON.stringify(out);
+        })()""" % json.dumps(statuses)
+        v, _ = ev(expr)
+        return json.loads(v) if v else {}
+
+    waiting_slot = {"at": 1134, "kind": "side", "status": "waiting", "task": None, "issuedAt": 0, "deadline": 0}
+    done_slot = {"at": 600, "kind": "side", "status": "done", "settledAt": 1,
+                 "task": {"title": "A", "desc": "", "category": "体质", "difficulty": 1, "minutes": 10, "kind": "side"}}
+    half = ring_case([done_slot, waiting_slot])
+    A("有未发布任务时成长环不是 100%", half.get("pct") == "50%", half)
+    A("有未发布任务时环内标注待发布", "1/2" in (half.get("cap") or "") and "待发布" in (half.get("cap") or ""), half.get("cap"))
+    A("有未发布任务时今日进度不是 1/1", (half.get("prog") or "").startswith("今日 1/2"), half.get("prog"))
+    A("环内文案不溢出内圈", (half.get("capW") or 999) <= 180, half.get("capW"))
+
+    full = ring_case([done_slot, dict(done_slot, at=1134)])
+    A("全部做完才显示 100%", full.get("pct") == "100%" and "待发布" not in (full.get("cap") or ""), full)
+    A("全部做完今日进度为 2/2", (full.get("prog") or "").startswith("今日 2/2"), full.get("prog"))
+
     # 自检
     ok, _ = ev("GROWTH.selftest()")
     A("页内 GROWTH.selftest() 通过", ok is True, ok)

@@ -48,16 +48,31 @@ function greet(){
   const h=new Date().getHours();
   return h<6?'夜深了':h<12?'上午好':h<18?'下午好':'晚上好';
 }
+/* 今日进度：成长环和「当前任务」角标共用这一份口径。
+   分母是今日全部计划槽位（含尚未发布的），不是「已发布」。
+   曾经两处各算一遍、都只数已发布：计划 2 个任务、做完 1 个、另一个还没到点发布时，
+   环算出 1/1 = 100%，角标写「今日 1/1」，而同一屏下面还有「今日 1 个任务尚未发布」——
+   同一个页面自己打自己。数字算在一处，才不会两边跑偏。 */
+function dayProgress(day){
+  if(!day) return {done:0,total:0,waiting:0,published:0,pct:0};
+  const total=day.slots.length;
+  const done=day.slots.filter(s=>s.status==='done').length;
+  const waiting=day.slots.filter(s=>s.status==='waiting').length;
+  return { done, total, waiting, published: total-waiting,
+    pct: total? Math.round(done/total*100) : 0 };
+}
+
 function renderHero(){
   const p=S.player, need=expToNext(p.level);
   const today=ds(new Date()), day=S.days[today];
-  const published=day?day.slots.filter(s=>s.status!=='waiting').length:0;
-  const done=day?day.slots.filter(s=>s.status==='done').length:0;
-  const pct= published? Math.round(done/published*100):0;
+  const pr = dayProgress(day);
   const C=2*Math.PI*100;
-  $('ringSeg').setAttribute('stroke-dasharray', `${C*pct/100} ${C}`);
-  $('ringPct').textContent=pct+'%';
-  $('ringCap').textContent= published?`今日成长环 ${done}/${published}`:'系统静默中';
+  $('ringSeg').setAttribute('stroke-dasharray', `${C*pr.pct/100} ${C}`);
+  $('ringPct').textContent=pr.pct+'%';
+  // 100% 只在今天真的收工时出现；还有没发布的任务就点明，别让环替系统吹牛
+  $('ringCap').innerHTML= pr.total
+    ? `今日成长环 ${pr.done}/${pr.total}` + (pr.waiting?`<span class="ring-sub">${pr.waiting} 个待发布</span>`:'')
+    : '系统静默中';
   $('greeting').textContent=`${greet()}，${p.name}`;
   const days=Math.max(1, Math.ceil((Date.now()-S.created)/86400000));
   $('greetSub').textContent=`${new Date().getMonth()+1} 月 ${new Date().getDate()} 日 星期${'日一二三四五六'[new Date().getDay()]} · 系统运行第 ${days} 天`;
@@ -256,8 +271,9 @@ function renderTasks(){
         + `<span class="muted">这条规则本身是设计的一部分：真实生活里，机会也不会提前通知你。</span></div>`);
     }
   }
-  const doneN=day.slots.filter(s=>s.status==='done').length, totalN=day.slots.filter(s=>s.status!=='waiting').length;
-  $('tProgress').textContent=`今日 ${doneN}/${totalN}`;
+  // 与成长环同一份口径（dayProgress），未发布的也算进分母
+  const pr=dayProgress(day);
+  $('tProgress').textContent=`今日 ${pr.done}/${pr.total}`+(pr.waiting?` · ${pr.waiting} 待发布`:'');
   box.innerHTML = parts.join('') || `<div class="empty">今日窗口尚未开启，系统静默中。</div>`;
   const pending=day.slots.filter(s=>s.status==='pending'||s.status==='partial').length + overdue.length;
   const badge=$('navToday');
