@@ -5,8 +5,10 @@
 
 运行：python tests/e2e_page.py
 """
+import atexit
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -26,6 +28,129 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import server as srv  # noqa: E402
 
 fails = 0
+
+
+# ---- 运行期临时资源（浏览器 profile / 隔离存档）--------------------------------
+# 历史包袱：早期的 e2e 每次都在 %TEMP% 留下一整套 Chromium profile（25~600MB），
+# 而且 proc.terminate() 杀不掉 Edge 的子进程树；断言一失败就提前退出，连这行都跑不到。
+# 于是跑几十轮 = 几个 GB 垃圾，全堆在 C 盘。现在：临时目录默认落在项目内 .tmp/e2e（不占系统盘），
+# 退出时（含异常/被杀之外的所有退出路径）无条件杀进程树 + 删目录，开跑前先扫上一轮残留。
+_cleanup_paths = []
+_cleanup_procs = []
+_cleanup_profiles = []
+
+
+def _project_root():
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _scratch_root():
+    base = os.environ.get("GROWTH_E2E_TMP") or os.path.join(_project_root(), ".tmp", "e2e")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+SHOT_DIR = os.path.join(_scratch_root(), "shots")
+os.makedirs(SHOT_DIR, exist_ok=True)
+
+
+def _kill_tree(proc):
+    """taskkill /T 连子进程一起收，光 terminate 根进程会留下 headless Edge。"""
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _kill_by_profile(prof):
+    """按 --user-data-dir 反查并强杀。
+    实测 Edge 的启动器进程会先退出，taskkill /T 打的是空 PID，真正持文件锁的
+    是它派生的一堆 renderer/utility，只能靠命令行里的 profile 路径把它们捞出来。"""
+    if not prof:
+        return
+    needle = prof.replace("'", "''")
+    ps = ("$p='" + needle + "';"
+          "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+          "Where-Object { $_.Name -in @('msedge.exe','chrome.exe','chromium.exe') "
+          "-and $_.CommandLine -and $_.CommandLine.Contains($p) } | "
+          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }")
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60)
+    except Exception:
+        pass
+
+
+def _rmtree(path):
+    """浏览器退出后文件句柄要松一会儿，重试几次再放弃。"""
+    if not path or not os.path.isdir(path):
+        return True
+    for _ in range(10):
+        shutil.rmtree(path, ignore_errors=True)
+        if not os.path.exists(path):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def cleanup():
+    """先杀进程再删目录，顺序不能反；可重复调用。"""
+    for p in list(_cleanup_procs):
+        _kill_tree(p)
+    _cleanup_procs.clear()
+    for prof in list(_cleanup_profiles):
+        _kill_by_profile(prof)
+    _cleanup_profiles.clear()
+    left = [p for p in _cleanup_paths if not _rmtree(p)]
+    _cleanup_paths.clear()
+    for p in left:
+        print("警告：临时目录没删掉（可能被占用）:", p)
+    return not left
+
+
+atexit.register(cleanup)
+
+
+def sweep_stale(max_age_min=120):
+    """清掉上一轮遗留的 growth_e2e_* 目录（崩溃/被 kill 那次的）。"""
+    now = time.time()
+    killed = 0
+    freed = 0
+    for root in (tempfile.gettempdir(), _scratch_root()):
+        if not os.path.isdir(root):
+            continue
+        for name in os.listdir(root):
+            if not name.startswith("growth_e2e_"):
+                continue
+            path = os.path.join(root, name)
+            try:
+                if now - os.path.getmtime(path) < max_age_min * 60:
+                    continue
+                size = 0
+                for dirpath, _dirnames, filenames in os.walk(path):
+                    for fn in filenames:
+                        try:
+                            size += os.path.getsize(os.path.join(dirpath, fn))
+                        except OSError:
+                            pass
+                if _rmtree(path):
+                    killed += 1
+                    freed += size
+            except OSError:
+                pass
+    if killed:
+        print("清理上一轮残留：%d 个临时 profile，释放 %.0f MB" % (killed, freed / 1048576.0))
 
 
 def A(name, cond, extra=""):
@@ -90,7 +215,9 @@ def main():
     port = free_port()
     cdp_port = free_port()
     # 隔离存档：E2E 会把页面真正跑起来（settle 会写 /api/save），绝不能污染 data/growth.json。
-    tmpdir = tempfile.mkdtemp(prefix="growth_e2e_data_")
+    sweep_stale()
+    tmpdir = tempfile.mkdtemp(prefix="growth_e2e_data_", dir=_scratch_root())
+    _cleanup_paths.append(tmpdir)
     os.makedirs(os.path.join(tmpdir, "data"), exist_ok=True)
     srv.DATA_FILE = os.path.join(tmpdir, "data", "growth.json")
     # 静态资源仍从项目根目录读，只是存档改到临时目录
@@ -104,11 +231,14 @@ def main():
         print("跳过：未找到 Edge/Chrome")
         sys.exit(0)
 
-    prof = tempfile.mkdtemp(prefix="growth_e2e_")
+    prof = tempfile.mkdtemp(prefix="growth_e2e_", dir=_scratch_root())
+    _cleanup_paths.append(prof)
+    _cleanup_profiles.append(prof)
     proc = subprocess.Popen([
         exe, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
         "--user-data-dir=" + prof, "--remote-debugging-port=" + str(cdp_port), "about:blank",
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _cleanup_procs.append(proc)
 
     # 等 CDP 就绪
     for _ in range(60):
@@ -686,8 +816,8 @@ def main():
     })()""")
     A("toast 最多同时 3 条", tst == 3, tst)
 
-    shot_path = os.path.join(tempfile.gettempdir(), "growth_e2e_data_page.png")
-    today_shot = os.path.join(tempfile.gettempdir(), "growth_e2e_today.png")
+    shot_path = os.path.join(SHOT_DIR, "growth_e2e_data_page.png")
+    today_shot = os.path.join(SHOT_DIR, "growth_e2e_today.png")
     try:
         ev("showPage('data')")
         cmd("Emulation.setDeviceMetricsOverride", {"width": 1120, "height": 1400, "deviceScaleFactor": 1, "mobile": False})
@@ -701,7 +831,7 @@ def main():
         m2, _ = cmd("Page.captureScreenshot", {"format": "png"})
         open(today_shot, "wb").write(_b64.b64decode(m2["result"]["data"]))
         # 额度条截图（两种状态并排：满额 / 耗尽）
-        quota_shot = os.path.join(tempfile.gettempdir(), "growth_e2e_quota.png")
+        quota_shot = os.path.join(SHOT_DIR, "growth_e2e_quota.png")
         ev("""(()=>{
           const k=ds(new Date());
           S.days[k]={slots:[
@@ -719,7 +849,7 @@ def main():
         print("额度条截图:", quota_shot)
 
         # 耗尽态截图
-        quota_out_shot = os.path.join(tempfile.gettempdir(), "growth_e2e_quota_out.png")
+        quota_out_shot = os.path.join(SHOT_DIR, "growth_e2e_quota_out.png")
         ev("""(()=>{
           const k=ds(new Date());
           S.days[k].rescueCount=1;
@@ -732,7 +862,7 @@ def main():
         print("额度耗尽截图:", quota_out_shot)
 
         # 任务池采用情况截图
-        pool_shot = os.path.join(tempfile.gettempdir(), "growth_e2e_pool.png")
+        pool_shot = os.path.join(SHOT_DIR, "growth_e2e_pool.png")
         ev("""(()=>{
           S.taskPool=[{title:'拉伸10分钟',desc:'',category:'体质',difficulty:1,minutes:10},
                       {title:'读书20页',desc:'',category:'智力',difficulty:2,minutes:30},
@@ -753,7 +883,7 @@ def main():
         print("任务池截图:", pool_shot)
 
         # 诊断→修复按钮截图
-        wfix_shot = os.path.join(tempfile.gettempdir(), "growth_e2e_window_fix.png")
+        wfix_shot = os.path.join(SHOT_DIR, "growth_e2e_window_fix.png")
         ev("""(()=>{
           const k=ds(new Date());
           const at=t=>new Date(k+'T'+t+':00').getTime();
@@ -780,7 +910,7 @@ def main():
         print("窗口修复截图:", wfix_shot)
 
         # 周报补救复盘截图
-        rescue_shot = os.path.join(tempfile.gettempdir(), "growth_e2e_rescue_review.png")
+        rescue_shot = os.path.join(SHOT_DIR, "growth_e2e_rescue_review.png")
         ev("""(()=>{
           const k=ds(new Date());
           S.days[k]={slots:[
@@ -804,7 +934,7 @@ def main():
         print("补救复盘截图:", rescue_shot)
 
         # 周报截图：滚动到周报卡
-        rep_shot = os.path.join(tempfile.gettempdir(), "growth_e2e_report.png")
+        rep_shot = os.path.join(SHOT_DIR, "growth_e2e_report.png")
         ev("""(()=>{
           S.player.attrs={体质:2,智力:60,精神:10,自律:10};
           const m = weekMetrics(S, ds(new Date()), 7);
@@ -822,7 +952,7 @@ def main():
         print("周报截图:", rep_shot)
 
         # 属性突破卡：滚到数据页底部单独截图（它在 1400px 视口外）
-        rank_shot = os.path.join(tempfile.gettempdir(), "growth_e2e_rank.png")
+        rank_shot = os.path.join(SHOT_DIR, "growth_e2e_rank.png")
         ev("""(()=>{ S.rankUps=[{cat:'智力',rank:'D',value:96,t:Date.now()},
                         {cat:'体质',rank:'E',value:42,t:Date.now()-86400000*2}];
                 showPage('data'); renderRankTimeline();
@@ -843,7 +973,7 @@ def main():
     except Exception as e:
         print("截图跳过:", e)
 
-    proc.terminate()
+    cleanup()
     httpd.shutdown()
     print("\n端到端页面验证通过 ✓" if not fails else "\n%d 项失败 ✗" % fails)
     sys.exit(0 if not fails else 1)
