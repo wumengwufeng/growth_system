@@ -123,6 +123,56 @@ async function restoreFromDiskIfEmpty(){
   }catch(e){ /* file:// 直开或服务未启动：忽略，走全新档案 */ }
 }
 
+/* ── 运行环境探测：本机版(有 Python 后端) vs 纯静态托管(如 GitHub Pages) ──
+   静态托管时 /api/* 全部 404：磁盘备份静默停用（已有降级），AI 也不可用。
+   这个标志只用于"给访客一句解释"，不改变任何业务逻辑。 */
+let STATIC_HOST = false;
+async function detectHost(){
+  try{
+    const r = await fetch('/api/ping', { method:'GET' });
+    if(r.ok){
+      const j = await r.json();
+      STATIC_HOST = !(j && j.app);
+    }else{
+      STATIC_HOST = true;   // 404：纯静态托管
+    }
+  }catch(e){
+    STATIC_HOST = true;     // file:// 直开或断网
+  }
+  return STATIC_HOST;
+}
+
+/* 首次访问（或访客清过缓存）且任务尚未发布时，立刻补一个起步任务。
+   目的：静态 demo 里"窗口还没到点"会让访客看到空页面，直接关掉。
+   只补一次：靠 dayRec.demoStarter 标记，不写进 stats，不影响宿主真实存档的判定。 */
+async function seedDemoStarter(){
+  const today = ds(new Date());
+  const day = S.days[today];
+  if(!day) return false;
+  if(day.demoStarter) return false;                                  // 已经补过
+  if(day.slots.some(sl=>sl.status!=='waiting' && sl.status!=='void')) return false;  // 已有真任务
+  const live = day.slots.filter(sl=>sl.status==='waiting');
+  if(!live.length) return false;
+  const nowM = nowMin();
+  const at = Math.min(...live.map(sl=>sl.at));
+  if(at <= nowM) return false;                                       // 已到点，正常流程会发
+  const hist = titleHistory(S.days, today);
+  const pool = FALLBACK_POOL.filter(t=>t.difficulty===1 && t.minutes<=15);
+  const pick = pickFreshTemplate(pool, hist, new Set(), rngFor(today+'|demo')) || FALLBACK_POOL[0];
+  const slot = {
+    at: Math.max(0, nowM - 1), kind:'side', status:'pending',
+    issuedAt: Date.now(), demo:true,
+    task: {...pick, kind:'side'},
+    deadline: Math.min(new Date(today+'T23:59:00').getTime(), Date.now()+120*60000),
+  };
+  day.slots.push(slot);
+  day.demoStarter = true;
+  const r = rewards(slot.task);
+  log(`访客模式：系统先给一条轻量任务热身——「${slot.task.title}」（奖励 EXP+${r.exp} ◈+${r.coins} ${slot.task.category}+${r.attr}）。剩下的仍按不定时发布。`,'up');
+  save();
+  return true;
+}
+
 /* ── 面板心跳（判断"这段提醒有没有人接收"）──
    单独存一个键，刻意不写进存档：心跳每轮结算都写，若塞进存档会把 updatedAt 一直顶新，
    双开时的 409 冲突判定就跟着失真（后台旧标签页的心跳会被当成"更新的进度"）。 */

@@ -13,12 +13,20 @@ function runSettle(){
 }
 
 (async function boot(){
+  await detectHost();
   await restoreFromDiskIfEmpty();
   bindSettings();
   if(!S.log.length) log('系统绑定成功。宿主，从今天起，你的成长由本系统记录与量化。');
   showPage(S.settings.page);
-  runSettle();
+  // 先把界面画出来（存档里已有的东西立刻可见），不要让 AI 调用挡在首屏前面：
+  // 静态托管时 callAI 会连超时带重试卡 40 秒，首屏就是一片空白。
   UI.renderAll();
+  runSettle();
+  // 纯静态托管（无后端）时，访客可能撞上"窗口还没到点"的空页面：
+  // 补一条起步任务让页面立刻有事可做。本机版（有后端）不触发。
+  // 需要等首轮结算把今日记录（slots）建出来，所以在它之后跑；不阻塞首屏渲染。
+  if(STATIC_HOST) settle().then(()=>seedDemoStarter()).then(()=>UI.renderAll())
+    .catch(err=>console.error('[growth] 访客模式起步任务失败：', err));
   setInterval(runSettle, 30000);
   setInterval(()=>{ // 秒级倒计时
     document.querySelectorAll('[data-deadline]').forEach(el=>{ el.textContent=fmtRemain(+el.dataset.deadline); });

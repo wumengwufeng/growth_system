@@ -18,7 +18,10 @@ function noteRescue(dayRec, kind, gapMin, nowMs){
 async function settle(){
   const today = ds(new Date());
   if(!S.days[today]) S.days[today] = { slots: planDay(today, S.created, {start:S.settings.dayStart,end:S.settings.dayEnd})
-    .map(p=>({...p, status:'waiting', task:null, issuedAt:0, deadline:0})), tzOffset:-new Date().getTimezoneOffset() };
+    .map(p=>({...p, status:'waiting', task:null, issuedAt:0, deadline:0})),
+    tzOffset:-new Date().getTimezoneOffset(),
+    // 今日记录建立的分钟数：早于它到点的槽位从未有机会提醒任何人（见下方 neverDelivered）
+    createdAtMin: nowMin() };
   let dirty=false;  // 必须在任何 dirty=true 之前声明（曾因后置声明触发 TDZ，整轮结算静默失败）
   // 每日快照（数据页成长曲线的数据源），变化时才落盘
   const snap = { attrs:{...S.player.attrs}, level:S.player.level, exp:S.player.exp };
@@ -71,9 +74,18 @@ async function settle(){
   const need=[];               // [{sl, d}] d = rescueDecision 的结果
   const nowM = nowMin();
   let rescueLeft = Math.max(0, RESCUE_PER_DAY - (dayRec.rescueCount||0));
+  // 早于「今日记录建立时刻」的发布点，从来没有机会提醒任何人（第一次打开面板时
+  // 已是 13:00，而槽位排在 10:00）。这种一律按「刚发布」处理，否则新宿主一进门就被
+  // 训"错过突发任务、奖励已收回"——那时系统还不存在，他没错过任何东西。
+  // 注意不能拿 S.created 判断：老存档换天、测试注入的 dayRec 都会误判。
+  // createdAtMin 缺失（老存档）时不启用该豁免，保持原有行为。
   for(const sl of dayRec.slots){
     if(sl.status!=='waiting' || sl.at>nowM) continue;
-    const d = rescueDecision(sl, { nowMs:now, nowMinVal:nowM, dayStr:today, offline, rescueLeft });
+    const neverDelivered = dayRec.createdAtMin !== undefined && sl.at < dayRec.createdAtMin;
+    const d = rescueDecision(sl, {
+      nowMs:now, nowMinVal: neverDelivered ? Math.min(nowM, sl.at + 1) : nowM,
+      dayStr:today, offline, rescueLeft,
+    });
     if(d.action==='void'){
       // 状态一旦设为 void，下一轮循环的 `status!=='waiting'` 就会跳过它，
       // 所以这里天然只执行一次，无需额外的 notified 标志（原来的标志是死代码）。

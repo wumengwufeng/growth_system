@@ -235,7 +235,23 @@ function renderTasks(){
     if(showDone) finished.forEach(([sl,i])=>parts.push(taskCard(sl,i,today)));
   }
   const waiting=day.slots.filter(s=>s.status==='waiting').length;
-  if(waiting) parts.push(`<div class="empty">系统静默中 —— 今日还有 ${waiting} 个任务未发布，时刻不定，保持警惕。</div>`);
+  if(waiting){
+    // 已经有任务在手上时，这句话只是"还有 N 个在路上"，一句话够了；
+    // 一条任务都没有时（访客第一次打开最可能撞上的画面），得把机制讲清楚，
+    // 否则看起来像坏掉的空页面。
+    const hasLive = day.slots.some(sl=>sl.status==='pending'||sl.status==='partial');
+    if(hasLive){
+      parts.push(`<div class="empty">系统静默中 —— 今日还有 ${waiting} 个任务未发布，时刻不定，保持警惕。</div>`);
+    }else{
+      const nextAt = day.slots.filter(sl=>sl.status==='waiting').map(sl=>sl.at).sort((a,b)=>a-b)[0];
+      const hint = nextAt!==undefined && nextAt>nowMin()
+        ? `下一个最晚 ${hm(nextAt)} 前后出现`
+        : '随时可能出现';
+      parts.push(`<div class="empty">⏳ 系统正在蓄势 —— 今日 ${waiting} 个任务尚未发布。<br>`
+        + `任务按不定时发布（${hint}），不是坏了。<br>`
+        + `<span class="muted">这条规则本身是设计的一部分：真实生活里，机会也不会提前通知你。</span></div>`);
+    }
+  }
   const doneN=day.slots.filter(s=>s.status==='done').length, totalN=day.slots.filter(s=>s.status!=='waiting').length;
   $('tProgress').textContent=`今日 ${doneN}/${totalN}`;
   box.innerHTML = parts.join('') || `<div class="empty">今日窗口尚未开启，系统静默中。</div>`;
