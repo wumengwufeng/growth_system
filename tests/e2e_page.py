@@ -9,6 +9,7 @@ import atexit
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -58,13 +59,20 @@ def _shot_dir():
 
 
 def _kill_tree(proc):
-    """taskkill /T 连子进程一起收，光 terminate 根进程会留下 headless Edge。"""
+    """连子进程一起收，光 terminate 根进程会留下无头浏览器。
+    Windows 走 taskkill /T；其他平台退回 terminate + killpg，保持跨平台可用。"""
     if proc is None:
         return
     try:
         if proc.poll() is None:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+            else:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except Exception:
+                    proc.terminate()
     except Exception:
         pass
     try:
@@ -80,7 +88,7 @@ def _kill_by_profile(prof):
     """按 --user-data-dir 反查并强杀。
     实测 Edge 的启动器进程会先退出，taskkill /T 打的是空 PID，真正持文件锁的
     是它派生的一堆 renderer/utility，只能靠命令行里的 profile 路径把它们捞出来。"""
-    if not prof:
+    if not prof or os.name != "nt":
         return
     needle = prof.replace("'", "''")
     ps = ("$p='" + needle + "';"
@@ -240,7 +248,8 @@ def main():
     proc = subprocess.Popen([
         exe, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
         "--user-data-dir=" + prof, "--remote-debugging-port=" + str(cdp_port), "about:blank",
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=(os.name != "nt"))
     _cleanup_procs.append(proc)
 
     # 等 CDP 就绪
