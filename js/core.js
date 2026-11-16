@@ -32,6 +32,42 @@ function rewards(t){
   const mult = t.kind==='burst'?2:1;
   return { exp: d*15*mult, coins: d*8*mult, attr: d*4*mult };
 }
+
+/* ── 结算链：唯一奖励出口（唯一路径约束）──
+   任何地方要算"这条任务给多少"，都必须走 settleReward()，不允许自己乘系数。
+   背景：此前 rewards / rewardsWithRarity / halfRewards / blessing 分散在多处，
+   任务卡按 rewardsWithRarity 显示、实际发放又叠赐福 —— 卡上写 EXP+15，
+   到账 EXP+22，用户看到的是对不上账。收成一个入口后，展示和发放同源。
+
+   顺序固定，五步：
+     ① 基础（难度 × 类型倍率）
+     ② 稀有度
+     ③ 分段推进（半奖：不吃稀有度与赐福，保持原行为）
+     ④ 当日赐福
+     ⑤ 连胜护盾 / 低谷庇护等后续机制在这里挂，不许绕到别处
+   返回 { exp, coins, attr, factors }，factors 用于向用户解释"为什么是这个数"。 */
+function settleReward(t, opt){
+  const o = opt || {};
+  const partial = !!o.partial;
+  const factors = {};
+  // ③ 半奖走原路径：只给基础的一半，不叠稀有度与赐福
+  if(partial){
+    const half = halfRewards(t);
+    factors.partial = true;
+    return { exp: half.exp, coins: half.coins, attr: half.attr, factors };
+  }
+  const base = rewards(t);
+  const rr = RARITY[t && t.rarity] || RARITY.common;
+  const bless = (typeof o.blessing==='number' && o.blessing>0) ? o.blessing : 1;
+  factors.rarity = rr.exp;
+  factors.blessing = bless;
+  return {
+    exp:  Math.round(base.exp  * rr.exp * bless),
+    coins:Math.round(base.coins* rr.coins * bless),
+    attr: Math.round(base.attr * rr.attr * bless),
+    factors,
+  };
+}
 const expToNext = lv => 60 + lv*40;
 /* 属性等级阈值：从高到低排列，供 attrRank 与跨级播报共用（避免两处各写一套数字） */
 const RANK_LADDER = [
@@ -86,16 +122,45 @@ function dayStats(days, dateStr){
   }
   return s;
 }
-function computeStreak(days, todayStr){
+function computeStreak(days, todayStr, shielded){
   // 今天已完成则从今天起算；今天尚未完成不打断连续（截至昨天）
+  // shielded：被护盾救下的日期集合，这些日子当作"没断"处理
+  const sh = shielded instanceof Set ? shielded : new Set(shielded||[]);
   let n=0, d=new Date(todayStr+'T00:00:00');
   if(dayStats(days, todayStr).done>0) n++;
   while(n<3650){
     d.setDate(d.getDate()-1);
-    if(dayStats(days, ds(d)).done>0) n++;
+    const k=ds(d);
+    if(dayStats(days, k).done>0 || sh.has(k)) n++;
     else break;
   }
   return n;
+}
+
+/* ── 连胜护盾（移植自「海克斯学习平台」guardrail 的 onMiss）──
+   断签不该直接清零：真实生活里一天没做，往往不是放弃，是那天被别的事占满了。
+   规则：连续天数每满 7 天，发 1 枚护盾（最多存 3 枚）；
+        断签时自动消耗 1 枚，那天记为"护住"，连续天数不清零。
+   与海克斯的差异：海克斯是"连胜减半"，这里保留连续天数更符合个人成长场景
+        ——惩罚感更低，机制也更好解释。 */
+const SHIELD_MAX = 3;
+const SHIELD_EARN_EVERY = 7;
+
+/* 护盾账本：已发放（累计、单调递增）− 已消耗 = 剩余。
+   用"累计发放"而不是"当前 streak / 7"：断签后 streak 归零，
+   后者会把已经到手的护盾算回去。 */
+function shieldLedger(granted, used){
+  const g = Math.max(0, granted|0), u = Math.max(0, used|0);
+  return { granted: g, used: u, left: Math.max(0, Math.min(SHIELD_MAX, g - u)) };
+}
+/* 这次 streak 是否够再发一枚（每满 7 天发一枚，累计不超过上限的倍数） */
+function shieldShouldGrant(streak, granted){
+  const should = Math.min(SHIELD_MAX, Math.floor(Math.max(0,streak) / SHIELD_EARN_EVERY));
+  return (granted|0) < should;
+}
+/* 取当前存档的连胜（自动带上护盾救下的日子） */
+function streakOf(S){
+  return computeStreak(S.days, ds(new Date()), S.shieldedDays);
 }
 
 /* ── 分段推进：把「45 分钟」拆成「先做 10 分钟」──
@@ -145,6 +210,38 @@ function shopProgress(coins, cost){
   const need = Math.max(0, cost_-coins_);
   const perTask = rewards({difficulty:2, kind:'side'}).coins;  // 一个 ★★ 支线 = 16 金币
   return { pct, need, tasks: Math.ceil(need/perTask) };
+}
+
+/* ── 低谷庇护（移植自「海克斯学习平台」guardrail 的 troughCheck）──
+   连续 N 天零完成 → 进入"低谷"。此时系统主动降档，而不是继续加压：
+     · 不再追加起步任务 / 连锁任务（少即是多）
+     · 当天任务数上限降到 1~2，难度压到 ★1（先恢复节奏，不是冲刺）
+     · 公告语气转为"先做一件小事"，不说教
+   触发条件只看"连续零完成天数"，不看完成率——完成率波动是常态，
+   连续归零才是真的卡住了。 */
+const TROUGH_DAYS = 2;   // 连续几天零完成算进入低谷
+
+/* 从 endDay 的「前一天」往前数，连续零完成的天数。
+   为什么不从 endDay 当天算：当天还没过完，早上打开面板时今天必然 0 完成，
+   把它算进去会让所有人一睁眼就进低谷。只看已经完结的日子才算数。
+   跳过没有记录的日子：系统没运行的那天不算宿主偷懒。 */
+function troughDepth(days, endDay){
+  let n = 0, d = new Date(endDay+'T00:00:00');
+  d.setDate(d.getDate()-1);                            // 从昨天起算
+  for(let i=0; i<30; i++){
+    const k = ds(d);
+    const rec = days[k];
+    if(!rec){ d.setDate(d.getDate()-1); continue; }    // 没记录：跳过，不惩罚
+    const st = dayStats(days, k);
+    if(st.total === 0){ d.setDate(d.getDate()-1); continue; }
+    if(st.done > 0) break;                             // 有完成 → 低谷结束
+    n++;
+    d.setDate(d.getDate()-1);
+  }
+  return n;
+}
+function inTrough(days, endDay){
+  return troughDepth(days, endDay) >= TROUGH_DAYS;
 }
 
 /* ── 补交拉力：窗口过半仍零完成时，给一个 10 分钟起步任务 ──
@@ -272,15 +369,11 @@ function rollRarity(rnd){
   if(r < 0.20) return 'rare';
   return 'common';
 }
-/* 按稀有度放大奖励（round 保持整数，避免金币出现小数） */
+/* 兼容壳：等价的 settleReward（不含赐福）。
+   保留是因为自检与对拍按这个名字断言；新代码请直接用 settleReward —— 单一出口。 */
 function rewardsWithRarity(t){
-  const base = rewards(t);
-  const rr = RARITY[t && t.rarity] || RARITY.common;
-  return {
-    exp: Math.round(base.exp * rr.exp),
-    coins: Math.round(base.coins * rr.coins),
-    attr: Math.round(base.attr * rr.attr),
-  };
+  const r = settleReward(t, {});
+  return { exp: r.exp, coins: r.coins, attr: r.attr };
 }
 
 /* ── 5. 每日系统赐福：确定性随机（同一天所有人/多次打开结果一致）── */
@@ -543,7 +636,7 @@ function weekMetrics(S, anchorDay, span=7){
     rateDelta: c.rate-p.rate,
     doneDelta: c.done-p.done,
     attrDelta: attrDelta(cur),
-    streak: computeStreak(S.days, end),
+    streak: computeStreak(S.days, end, S.shieldedDays),
     strongest: cats[0]||null,
     // 补救复盘：本周错过的次数、救回构成、额度消耗，以及与上周的对比
     rescueDelta: c.rescue.events - p.rescue.events,
@@ -923,6 +1016,69 @@ function selftest(){
   A('池统计空池安全', poolStats({taskPool:[],days:{}}).adoptionRate===0);
   A('识别从未采用的任务', poolStats({taskPool:[{title:'没用过'},{title:'用过'}],
     days:{'2026-10-28':{slots:[{status:'done',task:{title:'用过'}}]}}}).neverUsed.join()==='没用过');
+
+  /* ── 结算链（settleReward）：唯一奖励出口 ── */
+  {
+    const t1 = {difficulty:2, kind:'side', category:'智力'};
+    const s0 = settleReward(t1, {});
+    A('结算链：普通任务无加成', s0.exp===30&&s0.coins===16&&s0.attr===8, JSON.stringify(s0));
+    A('结算链：稀有度生效', settleReward({...t1,rarity:'epic'},{}).exp===45);
+    A('结算链：赐福生效', settleReward(t1,{blessing:1.5}).exp===45, settleReward(t1,{blessing:1.5}).exp);
+    A('结算链：稀有度与赐福叠乘', settleReward({...t1,rarity:'epic'},{blessing:1.5}).exp===68, settleReward({...t1,rarity:'epic'},{blessing:1.5}).exp);
+    A('结算链：半奖不吃稀有度', settleReward({...t1,rarity:'epic'},{partial:true}).exp===15);
+    A('结算链：半奖不吃赐福', settleReward(t1,{partial:true,blessing:1.5}).exp===15);
+    A('结算链：突发 ×2 保留', settleReward({difficulty:2,kind:'burst'},{}).exp===60);
+    A('结算链：factors 可解释', (function(){const r=settleReward({...t1,rarity:'rare'},{blessing:1.5});return r.factors.rarity===1.3&&r.factors.blessing===1.5;})());
+    // 卡片预览与实发必须同源
+    A('结算链是 rewardsWithRarity 的超集', (function(){
+      const a=settleReward({...t1,rarity:'rare'},{});
+      const b=rewardsWithRarity({...t1,rarity:'rare'});
+      return a.exp===b.exp&&a.coins===b.coins&&a.attr===b.attr;
+    })());
+  }
+
+  /* ── 连胜护盾 ── */
+  {
+    A('护盾账本：未发放时剩 0', shieldLedger(0,0).left===0);
+    A('护盾账本：发放 1 消耗 0', shieldLedger(1,0).left===1);
+    A('护盾账本：消耗后扣减', shieldLedger(2,1).left===1);
+    A('护盾账本：不会为负', shieldLedger(1,5).left===0);
+    A('护盾账本：上限 3 枚', shieldLedger(99,0).left===3, shieldLedger(99,0).left);
+    A('满 7 天才发第一枚', shieldShouldGrant(6,0)===false&&shieldShouldGrant(7,0)===true);
+    A('已发过不重复发', shieldShouldGrant(7,1)===false);
+    A('满 14 天可发第二枚', shieldShouldGrant(14,1)===true);
+    A('发放数不超上限', shieldShouldGrant(999,3)===false);
+    // 护住的日期不打断连续
+    const DS = {
+      '2026-10-24':{slots:[{status:'done',task:{title:'a'}}]},
+      '2026-10-25':{slots:[{status:'expired',task:{title:'b'}}]},   // 断签
+      '2026-10-26':{slots:[{status:'done',task:{title:'c'}}]},
+    };
+    A('无护盾时断签清零', computeStreak(DS,'2026-10-26')===1, computeStreak(DS,'2026-10-26'));
+    A('有护盾时连续保住', computeStreak(DS,'2026-10-26',['2026-10-25'])===3, computeStreak(DS,'2026-10-26',['2026-10-25']));
+    A('护盾只影响指定日期', computeStreak(DS,'2026-10-26',['2026-10-20'])===1);
+  }
+
+  /* ── 低谷庇护 ── */
+  {
+    const mk = (done) => ({slots: done>0
+      ? Array.from({length:done},()=>({status:'done',task:{title:'x'}}))
+      : [{status:'expired',task:{title:'x'}}]});
+    // 注意：troughDepth 从「昨天」起算，当天不算（当天还没过完）
+    A('昨天有完成不算低谷', troughDepth({'2026-10-25':mk(1),'2026-10-26':mk(0)},'2026-10-26')===0);
+    A('连续 1 天零完成不算低谷', troughDepth({'2026-10-25':mk(0),'2026-10-26':mk(1)},'2026-10-26')===1);
+    A('连续 2 天零完成 → 低谷', troughDepth({'2026-10-24':mk(0),'2026-10-25':mk(0),'2026-10-26':mk(1)},'2026-10-26')===2);
+    A('低谷判定布尔值', inTrough({'2026-10-24':mk(0),'2026-10-25':mk(0),'2026-10-26':mk(1)},'2026-10-26')===true);
+    A('昨天有完成则低谷结束', inTrough({'2026-10-24':mk(0),'2026-10-25':mk(1),'2026-10-26':mk(0)},'2026-10-26')===false);
+    A('当天零完成不影响低谷判定', troughDepth({'2026-10-24':mk(0),'2026-10-25':mk(0),'2026-10-26':mk(0)},'2026-10-26')===2,
+      troughDepth({'2026-10-24':mk(0),'2026-10-25':mk(0),'2026-10-26':mk(0)},'2026-10-26'));
+    // 系统没运行的日子不算偷懒
+    A('跳过无记录的天', troughDepth({'2026-10-23':mk(0),'2026-10-25':mk(0),'2026-10-26':mk(1)},'2026-10-26')===2,
+      troughDepth({'2026-10-23':mk(0),'2026-10-25':mk(0),'2026-10-26':mk(1)},'2026-10-26'));
+    A('窗口没开过的天不算', troughDepth({'2026-10-24':{slots:[]},'2026-10-25':mk(0),'2026-10-26':mk(1)},'2026-10-26')===1,
+      troughDepth({'2026-10-24':{slots:[]},'2026-10-25':mk(0),'2026-10-26':mk(1)},'2026-10-26'));
+  }
+
   console.log(ok?'%c[growth] 自检全部通过 ✓':'[growth] 自检存在失败项', ok?'color:#1F7A5C':'color:#B3554D');
   return ok;
 }

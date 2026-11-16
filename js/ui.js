@@ -117,7 +117,11 @@ function renderBlessing(){
 }
 
 function taskCard(sl, idx, dayStr){
-  const t=sl.task, r=sl.task?rewardsWithRarity(t):null;
+  const t=sl.task;
+  // 与实发同源：任务卡上的数字必须等于真到账的数字（此前只算稀有度不算赐福，卡上写 15 实发 22）
+  const r=sl.task?settleReward(t, {
+    blessing: sl.status==='partial' ? 1 : blessingMult(blessingFor(dayStr, S.created), t.category),
+  }):null;
   const kindBadge=`<span class="chip ${sl.kind==='burst'?'chip-burst':'chip-accent'}">${sl_kind_cn(sl.kind)}${sl.kind==='burst'?' ×2':''}</span>`;
   if(sl.status==='waiting') return '';
   if(sl.status==='void') return `<div class="task-card void"><div class="t-title">？？？（已收回的突发任务）${kindBadge}</div>
@@ -387,7 +391,7 @@ function clearReviewChatUI(){
 /* ── 数据页 ── */
 function renderData(){
   const today=ds(new Date());
-  const streak=computeStreak(S.days, today);
+  const streak=computeStreak(S.days, today, S.shieldedDays);   // 带上护盾救下的日子
   let d7=0, t7=0;
   for(let i=0;i<7;i++){ const d=new Date(); d.setDate(d.getDate()-i); const s=dayStats(S.days, ds(d)); d7+=s.done; t7+=s.total; }
   const rate= t7? Math.round(d7/t7*100):0;

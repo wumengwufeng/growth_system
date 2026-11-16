@@ -29,6 +29,9 @@ function migrate(s){
   if(typeof s.updatedAt!=='number') s.updatedAt=0;
   if(!Array.isArray(s.achievements)) s.achievements=[];
   if(!Array.isArray(s.streakClaimed)) s.streakClaimed=[];
+  if(typeof s.shieldsGranted!=='number') s.shieldsGranted=0;   // 累计发放的护盾枚数
+  if(typeof s.shieldsUsed!=='number') s.shieldsUsed=0;         // 累计消耗的枚数
+  if(!Array.isArray(s.shieldedDays)) s.shieldedDays=[];        // 被护住的日期（YYYY-MM-DD）
   if(!Array.isArray(s.rankUps)) s.rankUps=[];
   ensureMainQuest(s);          // 主线任务：老存档补一个默认主线，进度按历史完成数回填
   if(s.mainQuest && s.mainQuest.progress===0 && s.stats && s.stats.done>0){
@@ -167,7 +170,7 @@ async function seedDemoStarter(){
   };
   day.slots.push(slot);
   day.demoStarter = true;
-  const r = rewards(slot.task);
+  const r = settleReward(slot.task, { blessing: blessingMult(blessingFor(today, S.created), slot.task.category) });
   log(`访客模式：系统先给一条轻量任务热身——「${slot.task.title}」（奖励 EXP+${r.exp} ◈+${r.coins} ${slot.task.category}+${r.attr}）。剩下的仍按不定时发布。`,'up');
   save();
   return true;

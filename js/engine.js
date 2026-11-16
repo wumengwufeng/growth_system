@@ -69,6 +69,10 @@ async function settle(){
     sl.status='expired'; S.stats.expired++; dirty=true;
     log(`任务「${sl.task.title}」超出时限，已失效。`,'bad');
   }
+  // 断签补护盾：要在上面"往日任务已失效"之后判断，否则昨天的完成数还没结算对。
+  // 用护盾会改 shieldedDays，属于存档变更，所以要置 dirty。
+  if(useShieldIfBroke()) dirty = true;
+
   // 待发布槽位：到点的按「有没有人接收过提醒」决定处置——
   // 在线却拖过 2 小时的突发仍按原规则收回；离线期错过的则补救（重新计时/救回一次）。
   const need=[];               // [{sl, d}] d = rescueDecision 的结果
@@ -116,7 +120,8 @@ async function settle(){
       deadline: Math.min(new Date(today+'T23:59:00').getTime(), Date.now()+120*60000) };
     dayRec.slots.push(slot);
     dayRec.starter = true;
-    const r = rewards(slot.task);
+    // 公告上的数字也要与实发一致（含赐福），否则用户照着公告核对会以为少发了
+    const r = settleReward(slot.task, { blessing: blessingMult(blessingFor(today, S.created), slot.task.category) });
     log(`宿主今日尚无进展，系统追加一个起步任务：「${slot.task.title}」（奖励 EXP+${r.exp} ◈+${r.coins} ${slot.task.category}+${r.attr}）。动起来就行。`,'up');
     dirty = true;
   }
@@ -139,7 +144,8 @@ async function settle(){
         sl.deadline = d.deadline;
         if(d.tag) sl.rescued = d.tag;                 // UI 打「补时 / 救回」徽标
         if(d.cost) dayRec.rescueCount = (dayRec.rescueCount||0) + 1;
-        const r=rewardsWithRarity(t);
+        // 发布公告同样按最终实发显示（含赐福）
+        const r = settleReward(t, { blessing: blessingMult(blessingFor(today, S.created), t.category) });
         fresh.push({t, r, sl, d});
       });
       save();
@@ -195,14 +201,11 @@ function completeTask(dayStr, idx, note){
     const t=sl.task;
     const p=S.player;
 
-    // ① 基础（含稀有度）→ ② 当日赐福倍率
-    const base = wasPartial ? halfRewards(t) : rewardsWithRarity(t);
-    const mult = blessingMult(blessingFor(dayStr, S.created), t.category);
-    const r = {
-      exp:  Math.round(base.exp  * (wasPartial?1:mult)),
-      coins:Math.round(base.coins* (wasPartial?1:mult)),
-      attr: Math.round(base.attr * (wasPartial?1:mult)),
-    };
+    // 奖励统一走 settleReward：卡片预览与实发同源，用户看到多少就拿到多少
+    const bless = wasPartial ? 1 : blessingMult(blessingFor(dayStr, S.created), t.category);
+    const settled = settleReward(t, { partial: wasPartial, blessing: bless });
+    const r = { exp: settled.exp, coins: settled.coins, attr: settled.attr };
+    const mult = bless;
     const attrBefore = p.attrs[t.category] || 0;
     p.exp+=r.exp; p.coins+=r.coins; p.attrs[t.category]=attrBefore + r.attr;
     S.stats.done++;
@@ -285,15 +288,49 @@ function announceRankUp(cat, before, after){
 /* 连续签到阶梯奖励：连击达到 3/7/14/30 天时额外发金币（每档只领一次） */
 function checkStreakBonus(){
   const today = ds(new Date());
-  const streak = computeStreak(S.days, today);
+  const streak = streakOf(S);          // 带上护盾救下的日子，否则护住的连续会被算成 0
   S.streakClaimed = S.streakClaimed || [];
   const bonus = streakBonus(streak, S.streakClaimed);
-  if(!bonus) return;
-  S.streakClaimed.push(bonus.need);
-  S.player.coins += bonus.coins;
-  log(`🔥 连续 ${streak} 天！达成「${bonus.need} 日之约」，额外奖励 ◈+${bonus.coins}。`,'up');
-  window.UI?.toast?.(`连续 ${streak} 天！+${bonus.coins} 金币`,'gold');
-  window.UI?.ding?.(true);
+  if(bonus){
+    S.streakClaimed.push(bonus.need);
+    S.player.coins += bonus.coins;
+    log(`🔥 连续 ${streak} 天！达成「${bonus.need} 日之约」，额外奖励 ◈+${bonus.coins}。`,'up');
+    window.UI?.toast?.(`连续 ${streak} 天！+${bonus.coins} 金币`,'gold');
+    window.UI?.ding?.(true);
+  }
+  grantShields(streak);
+}
+
+/* ── 连胜护盾：每满 7 天发 1 枚（最多存 3 枚）── */
+function grantShields(streak){
+  S.shieldsGranted = Math.max(0, S.shieldsGranted|0);
+  if(!shieldShouldGrant(streak, S.shieldsGranted)) return;
+  S.shieldsGranted++;
+  log(`🛡 连续 ${streak} 天，获得 1 枚「连胜护盾」（剩余 ${shieldLedger(S.shieldsGranted, S.shieldsUsed).left}/${SHIELD_MAX}）。断签时它会替你挡住一次。`,'up');
+  window.UI?.toast?.('获得连胜护盾 🛡','gold');
+}
+
+/* ── 断签自动用护盾 ──
+   判定"昨天该做却没做"：昨天有已发布任务（不是空白天），且完成数为 0，
+   且昨天没被护过、护盾还有剩 —— 消耗 1 枚，把昨天记为护住，连续天数不清零。
+   只在断签当天补一次，不追溯历史（老存档不会突然冒出一堆护盾记录）。 */
+function useShieldIfBroke(){
+  const today = ds(new Date());
+  const d = new Date(today+'T00:00:00'); d.setDate(d.getDate()-1);
+  const y = ds(d);
+  if(!S.days[y]) return false;                       // 昨天没有记录：不算断签
+  const st = dayStats(S.days, y);
+  if(st.total === 0) return false;                   // 昨天窗口没开过，不算
+  if(st.done > 0) return false;                      // 昨天做过了
+  S.shieldedDays = Array.isArray(S.shieldedDays) ? S.shieldedDays : [];
+  if(S.shieldedDays.includes(y)) return false;       // 已经护过
+  const led = shieldLedger(S.shieldsGranted, S.shieldsUsed);
+  if(led.left <= 0) return false;                    // 没护盾
+  S.shieldsUsed = (S.shieldsUsed|0) + 1;
+  S.shieldedDays.push(y);
+  log(`🛡 连胜护盾生效：${y} 没有完成任务，但护盾挡住了这次断签（剩余 ${shieldLedger(S.shieldsGranted, S.shieldsUsed).left}/${SHIELD_MAX}）。连续天数保住了。`,'up');
+  window.UI?.toast?.('护盾生效，连续天数保住 🛡','gold');
+  return true;
 }
 
 /* 连锁任务：智力/自律类任务完成后有概率派生一个后续任务。

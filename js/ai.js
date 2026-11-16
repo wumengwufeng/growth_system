@@ -56,6 +56,9 @@ function mapCategory(c){
 }
 
 function sanitize(arr, n, kinds){
+  // 低谷期：模型不一定听话（提示词里说了"只出难度 1"，它仍可能给 ★★★）。
+  // 这里做硬兜底——净化阶段直接压到 1，保证低谷里的任务真的轻。
+  const capDiff = (typeof inTrough==='function' && inTrough(S.days, ds(new Date()))) ? 1 : 3;
   const out=[];
   for(const raw of arr){
     if(!raw || typeof raw.title!=='string' || !raw.title.trim()) continue;
@@ -63,7 +66,7 @@ function sanitize(arr, n, kinds){
       title: raw.title.trim().slice(0,40),
       desc: String(raw.desc||'').trim().slice(0,500),
       category: mapCategory(raw.category),
-      difficulty: Math.min(3,Math.max(1,raw.difficulty|0||1)),
+      difficulty: Math.min(capDiff,Math.max(1,raw.difficulty|0||1)),
       minutes: Math.min(120,Math.max(5,raw.minutes|0||30)),
       kind: kinds[out.length]||'side',
     });
@@ -179,6 +182,10 @@ ${S.taskPool.map(t=>`- ${t.title}（${t.category}，难度${t.difficulty}，约$
 
 /* 难度自适应：按近 7 日完成率调节出题难度 */
 function difficultyHint(){
+  // 低谷优先于完成率：连续零完成是真的卡住了，7 日完成率可能还没跌下来
+  if(typeof inTrough==='function' && inTrough(S.days, ds(new Date()))){
+    return '\n宿主已连续几天零完成，正处于低谷期。请只出难度 1 的轻量任务，一条即可，重点是帮他重新开始。';
+  }
   let done=0,total=0;
   for(let i=0;i<7;i++){ const d=new Date(); d.setDate(d.getDate()-i); const s=dayStats(S.days,ds(d)); done+=s.done; total+=s.total; }
   if(total<5) return '';
@@ -190,6 +197,13 @@ function difficultyHint(){
 
 async function callAI(n, kinds){
   const st=S.settings;
+  // 低谷期：连续零完成两天后，系统主动降档。任务数减半、只出轻任务。
+  // 这是"庇护"不是"惩罚"：卡住的时候该给台阶，而不是堆更多 KPI。
+  const trough = (typeof inTrough==='function') && inTrough(S.days, ds(new Date()));
+  if(trough){
+    n = Math.max(1, Math.ceil(n/2));
+    kinds = kinds.slice(0, n);
+  }
   const recent = [];
   for(const d of Object.keys(S.days).sort().reverse()){
     for(const sl of S.days[d].slots) if(sl.status==='done' && sl.task) recent.push(sl.task.title);
