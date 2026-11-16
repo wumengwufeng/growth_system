@@ -762,12 +762,12 @@ async function runAction(act, b, e){
     const have=new Set(S.taskPool.map(t=>t.title));
     for(const line of raw.split(/\r?\n/)){
       const s=line.trim(); if(!s) continue;
-      // 格式：标题 | 分类 | 难度 | 分钟（后三项可省略）
-      const [title,cat,diff,min] = s.split(/[|｜]/).map(x=>x.trim());
+      // 格式：标题 | 分类 | 难度 | 分钟 | 描述（后四项可省略，描述里可以有逗号但不能有竖线）
+      const [title,cat,diff,min,desc] = s.split(/[|｜]/).map(x=>x.trim());
       if(!title) continue;
       if(have.has(title.slice(0,40))){ skipped++; continue; }
       have.add(title.slice(0,40));
-      S.taskPool.push({ title:title.slice(0,40), desc:'',
+      S.taskPool.push({ title:title.slice(0,40), desc:(desc||'').slice(0,500),
         category: CATS.includes(cat)?cat:mapCategory(cat||''),
         difficulty: Math.min(3,Math.max(1,+diff||2)),
         minutes: Math.min(120,Math.max(5,+min||30)) });
