@@ -228,19 +228,26 @@ function completeTask(dayStr, idx, note){
     window.UI?.toast?.(`+${r.exp} EXP  +${r.coins} 金币`,'gold'); window.UI?.ding?.(false);
 
     // 主线进度（只在整体完成时推进，半奖不算）
+    // 按天计：同一个日期推第二次不改进度（一天做 5 个任务仍然只算 1 天）
     if(!wasPartial){
       const mq = ensureMainQuest(S);
-      const before = mq.progress;
-      const res = progressMainQuest(mq, 1);
-      if(res.progress !== before){
+      const res = mainQuestTick(mq, dayStr);
+      if(res.changed){
         if(res.milestone){
-          log(`主线「${mq.title}」推进至里程碑 ${res.milestone}/${mq.target}。`,'up');
+          log(`主线「${mq.title}」推进至里程碑 ${res.milestone}/${mq.target} 天。`,'up');
           window.UI?.toast?.(`主线里程碑：${res.milestone}/${mq.target}`,'gold');
         }
+        if(!mq.completed) log(`主线「${mq.title}」+1 天（${res.progress}/${mq.target} 天）。`,'up');
         if(res.justCompleted){
-          p.coins += mq.rewardCoins; p.exp += mq.rewardExp;
-          log(`🎉 主线任务「${mq.title}」完成！额外奖励 EXP+${mq.rewardExp} ◈+${mq.rewardCoins}。`,'up');
-          window.UI?.toast?.(`主线完成：${mq.title}`,'gold');
+          // 口径修正过老存档：奖励在"按任务数"那轮可能已经发过，不重复发
+          if(mq.rewardPaid){
+            log(`🎉 主线任务「${mq.title}」达成 ${mq.target} 天。该奖励此前已发放过，本次不重复发放。`,'up');
+            window.UI?.toast?.(`主线达成：${mq.title}`,'gold');
+          }else{
+            p.coins += mq.rewardCoins; p.exp += mq.rewardExp; mq.rewardPaid = true;
+            log(`🎉 主线任务「${mq.title}」完成！额外奖励 EXP+${mq.rewardExp} ◈+${mq.rewardCoins}。`,'up');
+            window.UI?.toast?.(`主线完成：${mq.title}`,'gold');
+          }
         }
       }
       checkStreakBonus();

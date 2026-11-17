@@ -498,6 +498,23 @@ def main():
     A("主线任务卡片已渲染", bool(ev("document.getElementById('mqTitle').textContent")[0]))
     A("主线进度条有宽度", ev("document.getElementById('mqBar').style.width")[0] is not None)
     A("主线进度文案含目标数", "/" in (ev("document.getElementById('mqProg').textContent")[0] or ""))
+    # 主线口径是「有进展的天数」，单位必须写出来，否则 30/30 会被读成任务数
+    A("主线进度带「天」单位", (ev("document.getElementById('mqProg').textContent")[0] or "").strip().endswith("天"),
+      ev("document.getElementById('mqProg').textContent")[0])
+
+    # 回归：一天做多个任务，主线只前进一天（2026-11-17 改口径的原因）
+    mq_reg, _ = ev("""(()=>{
+      const q={...DEFAULT_MAIN_QUEST, target:30, progress:0, activeDays:[], doneMilestones:[], completed:false};
+      const d1=mainQuestTick(q,'2026-11-16'), d1b=mainQuestTick(q,'2026-11-16');
+      const days= q.activeDays.length;          // 同日两次之后的活跃天数
+      const d2=mainQuestTick(q,'2026-11-17');
+      return JSON.stringify({first:d1.progress, sameDay:d1b.progress, next:d2.progress,
+        days, repeated:d1b.changed, daysAfter:q.activeDays.length});
+    })()""")
+    mj = json.loads(mq_reg) if mq_reg else {}
+    A("主线同一天只算一天", mj.get("first") == 1 and mj.get("sameDay") == 1 and mj.get("days") == 1, mj)
+    A("主线换天继续推进", mj.get("next") == 2 and mj.get("daysAfter") == 2, mj)
+    A("主线重复日期不再计", mj.get("repeated") is False, mj)
     A("设置页有语气下拉", ev("!!document.getElementById('sTone')")[0] is True)
     A("设置页有称号下拉", ev("!!document.getElementById('sTitle')")[0] is True)
     A("设置页有主线编辑框", ev("!!document.getElementById('mqEditTitle')&&!!document.getElementById('mqEditTarget')")[0] is True)

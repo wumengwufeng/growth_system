@@ -8,7 +8,12 @@ const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '
 const read = f => fs.readFileSync(new URL('../' + f, import.meta.url), 'utf8');
 
 let fails = 0;
-const A = (name, cond) => { if (!cond) { fails++; console.log('FAIL:', name); } else console.log('ok:', name); };
+// extra 只在失败时打印：不写出来的话，失败原因（哪条断言、实际值多少）就丢了，
+// 得再跑一遍去猜 —— 这条是踩过才加的
+const A = (name, cond, extra) => {
+  if (!cond) { fails++; console.log('FAIL:', name, extra === undefined ? '' : '→ ' + extra); }
+  else console.log('ok:', name);
+};
 
 /* ── 0. 先跑 core.js 的纯函数自检 ──
    这些断言（约 125 条）此前只能手动 `node -e` 触发，从不参与自动回归，
@@ -298,24 +303,32 @@ function makeSandbox({ now, save, fetchImpl } = {}) {
   A('auto 主题可解析为 light/dark', ['light', 'dark'].includes(ev('applyTheme()')));
 }
 
-/* ── 11. 主线任务：完成任务推进主线，达标的给额外奖励 ── */
+/* ── 11. 主线任务：按「有进展的天数」推进（2026-11-17 改口径） ──
+   原来是每完成 1 个任务 +1、目标 30；系统每天只发 2~3 个任务，
+   于是「三十天筑基」12 天就刷满。现在一天做几个都只算 1 天。 */
 {
   const { ev } = makeSandbox({ now: () => new Date('2026-10-28T10:30:00').getTime() });
   const S = ev('S');
   ev("BLESSINGS.length=0; BLESSINGS.push({id:'none',name:'无',desc:'',mult:{}});");
-  ev("S.mainQuest={...DEFAULT_MAIN_QUEST, target:3, progress:0, milestones:[1,2,3], doneMilestones:[], completed:false};");
+  ev("S.mainQuest={...DEFAULT_MAIN_QUEST, target:3, progress:0, activeDays:[], milestones:[1,2,3], doneMilestones:[], completed:false};");
   const mkSlot = () => ({ at: 600, kind: 'side', status: 'pending', settledAt: 0,
     task: { title: 'M', desc: '', category: '智力', difficulty: 2, minutes: 30, kind: 'side', rarity: 'common' },
     issuedAt: Date.now() - 5*60e3, deadline: Date.now() + 3600e3 });
-  S.days['2026-10-28'] = { slots: [mkSlot()] };
-  ev("completeTask('2026-10-28', 0, '')");
-  A('完成任务推进主线进度', S.mainQuest.progress === 1, S.mainQuest.progress);
+  S.days['2026-10-26'] = { slots: [mkSlot()] };
+  S.days['2026-10-27'] = { slots: [mkSlot()] };
+  S.days['2026-10-28'] = { slots: [mkSlot(), mkSlot()] };
+  ev("completeTask('2026-10-26', 0, '')");
+  A('完成任务记录有进展的一天', S.mainQuest.progress === 1, S.mainQuest.progress);
   A('里程碑 1 已记录', S.mainQuest.doneMilestones.includes(1));
-  const coinsBefore = S.player.coins;
-  S.days['2026-10-28'].slots.push(mkSlot(), mkSlot());
+  A('活跃日期入档', JSON.stringify(S.mainQuest.activeDays) === JSON.stringify(['2026-10-26']),
+    JSON.stringify(S.mainQuest.activeDays));
+  // 同一天再做两个：进度必须原地不动，否则又回到「数任务」的老毛病
+  ev("completeTask('2026-10-28', 0, '')");
   ev("completeTask('2026-10-28', 1, '')");
-  ev("completeTask('2026-10-28', 2, '')");
-  A('主线达标后 completed', S.mainQuest.completed === true);
+  A('同一天做完两个只算一天', S.mainQuest.progress === 2, S.mainQuest.progress);
+  const coinsBefore = S.player.coins;
+  ev("completeTask('2026-10-27', 0, '')");
+  A('满 3 天主线 completed', S.mainQuest.completed === true);
   A('主线完成发放额外奖励', S.player.coins > coinsBefore + 32, `增 ${S.player.coins - coinsBefore}`);
   A('主线完成有公告', S.log.some(l => l.txt.includes('主线任务')));
 }

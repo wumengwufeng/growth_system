@@ -313,25 +313,62 @@ function rescueDecision(sl, opt){
 
 /* ── 1. 主线任务：把 settings.goal 变成可追踪的长线 ── */
 const DEFAULT_MAIN_QUEST = {
-  title: '三十天筑基', desc: '完成 30 个任务，把「想要改变」变成「正在改变」。',
-  target: 30, progress: 0, rewardCoins: 300, rewardExp: 200, milestones: [10, 20, 30],
-  doneMilestones: [], completed: false, startedAt: 0,
+  title: '三十天筑基', desc: '累计 30 天有进展，把「想要改变」变成「正在改变」。',   // desc 另见 mainQuestDesc()
+  target: 30, progress: 0, unit: 'day', activeDays: [],
+  rewardCoins: 300, rewardExp: 200, milestones: [10, 20, 30],
+  doneMilestones: [], completed: false, rewardPaid: false, startedAt: 0,
 };
 function ensureMainQuest(S){
   if(!S.mainQuest || typeof S.mainQuest.progress!=='number') S.mainQuest = {...DEFAULT_MAIN_QUEST, startedAt: Date.now()};
   return S.mainQuest;
 }
-/* 完成一个任务推动主线；返回 {progress, justCompleted, milestone} */
-function progressMainQuest(q, n=1){
-  if(!q || q.completed) return { progress:q?q.progress||0:0, justCompleted:false, milestone:null };
-  q.progress = Math.min(q.target, (q.progress||0) + n);
+/* 完成一个任务推动主线；返回 {progress, changed, justCompleted, milestone}
+   口径是「有进展的天数」，不是「完成的任务数」：一天做 1 个和做 5 个都只算 1 天。
+   2026-11-17 改口径 —— 原来每完成 1 个任务 +1，可系统每天只发 2~3 个任务，
+   于是「三十天筑基」12 天就能刷满（用户实测：运行 22 天早已 CLEARED，与他预期对不上）。
+   名字承诺的是 30 天，机制就得数天。老存档走 backfillMainQuest() 从历史回填，不会凭空丢进度。 */
+function mainQuestTick(q, dayStr){
+  const idle = { progress: q? (q.progress||0) : 0, changed:false, justCompleted:false, milestone:null };
+  if(!q) return idle;
+  if(!Array.isArray(q.activeDays)) q.activeDays = [];
   q.doneMilestones = q.doneMilestones || [];
+  if(q.completed || !dayStr || q.activeDays.includes(dayStr)) return idle;
+  q.activeDays.push(dayStr);
+  q.progress = Math.min(q.target, q.activeDays.length);
   let milestone = null;
   for(const m of (q.milestones||[])){
     if(q.progress >= m && !q.doneMilestones.includes(m)){ q.doneMilestones.push(m); milestone = m; break; }
   }
-  if(q.progress >= q.target && !q.completed){ q.completed = true; return { progress:q.progress, justCompleted:true, milestone }; }
-  return { progress:q.progress, justCompleted:false, milestone };
+  if(q.progress >= q.target && !q.completed){
+    q.completed = true;
+    return { progress:q.progress, changed:true, justCompleted:true, milestone };
+  }
+  return { progress:q.progress, changed:true, justCompleted:false, milestone };
+}
+
+const OLD_MAIN_DESC = '完成 30 个任务，把「想要改变」变成「正在改变」。';
+const mainQuestDesc = n => `累计 ${n} 天有进展，把「想要改变」变成「正在改变」。`;
+
+/* 老存档语义迁移：「任务数进度」→「有进展的天数」，按历史记录回填。
+   幂等：activeDays 已存在就直接跳过 —— 每次 load 都重算会把用户后来改过的目标冲掉。
+   曾经按任务数判过「已完成」的，进度会退回去，但奖励不回收（既成事实、收回会掉级），
+   记 rewardPaid 表示已发过，免得真正达成时再发一次。 */
+function backfillMainQuest(q, days){
+  if(!q || Array.isArray(q.activeDays)) return false;
+  const list = Object.keys(days||{}).filter(d=>{
+    const rec = days[d];
+    return rec && Array.isArray(rec.slots) && rec.slots.some(sl=>sl && sl.status==='done');
+  }).sort();
+  const wasCompleted = !!q.completed;
+  q.unit = 'day';
+  q.activeDays = list;
+  // 文案也跟着口径走：只在还是旧默认文案时才改，用户自己写的描述不动
+  if(q.desc === OLD_MAIN_DESC) q.desc = mainQuestDesc(q.target||30);
+  q.progress = Math.min(q.target||30, list.length);
+  q.doneMilestones = (q.milestones||[]).filter(m=>m<=q.progress);
+  q.completed = q.progress >= (q.target||30);
+  if(wasCompleted) q.rewardPaid = true;
+  return true;
 }
 
 /* ── 2. 连续签到阶梯：连击到 N 天额外发金币 ── */
@@ -895,15 +932,28 @@ function selftest(){
       {nowMs:lateNight, nowMinVal:23*60+5, dayStr:'2026-10-26', offline:true, rescueLeft:1});
     A('夜间救回的截止也不跨天', new Date(dd3.deadline).getDate()===26, new Date(dd3.deadline).toLocaleString('zh-CN'));
   }
-  // 主线任务
-  const q={...DEFAULT_MAIN_QUEST, progress:0, doneMilestones:[], completed:false};
-  const pr1=progressMainQuest(q,9);
-  A('主线未达里程碑', pr1.milestone===null&&q.progress===9);
-  const pr2=progressMainQuest(q,1);
-  A('主线到 10 触发里程碑', pr2.milestone===10, JSON.stringify(pr2));
-  const pr3=progressMainQuest(q,20);
-  A('主线达标后 complete', pr3.justCompleted===true&&q.completed===true&&q.progress===30);
-  A('已完成的主线不再推进', progressMainQuest(q,5).justCompleted===false&&q.progress===30);
+  // 主线任务（口径：有进展的天数）
+  const q={...DEFAULT_MAIN_QUEST, target:3, progress:0, activeDays:[], doneMilestones:[], completed:false, milestones:[1,2,3]};
+  const pr1=mainQuestTick(q,'2026-10-26');
+  A('主线记录有进展的一天', pr1.changed===true&&q.progress===1, JSON.stringify(pr1));
+  const pr1b=mainQuestTick(q,'2026-10-26');
+  A('同一天多个任务只算一天', pr1b.changed===false&&q.activeDays.length===1, JSON.stringify(q.activeDays));
+  mainQuestTick(q,'2026-10-27');
+  const pr2=mainQuestTick(q,'2026-10-28');
+  A('满 3 天触发达标', pr2.justCompleted===true&&q.completed===true&&q.progress===3, JSON.stringify(pr2));
+  A('达标同时记录里程碑', q.doneMilestones.includes(3), JSON.stringify(q.doneMilestones));
+  A('已完成的主线不再推进', mainQuestTick(q,'2026-10-29').changed===false&&q.progress===3);
+  // 老存档迁移：按历史里有完成记录的日期回填
+  const q2={...DEFAULT_MAIN_QUEST, progress:30, doneMilestones:[10,20,30], completed:true};
+  delete q2.activeDays;   // 模拟老存档：这个字段当时还不存在（有它就等于已迁移过）
+  const migrated=backfillMainQuest(q2, {
+    '2026-10-26':{slots:[{status:'done'}]},
+    '2026-10-27':{slots:[{status:'done'}]},
+    '2026-10-28':{slots:[{status:'expired'}]},
+  });
+  A('老存档按活跃天数回填', migrated===true&&q2.progress===2&&q2.completed===false, JSON.stringify({p:q2.progress,c:q2.completed}));
+  A('迁移后标记奖励已发', q2.rewardPaid===true);
+  A('迁移幂等', backfillMainQuest(q2,{})===false&&q2.progress===2);
   // 连续签到
   A('连击 3 天发奖', streakBonus(3,[])!==null&&streakBonus(3,[]).coins===30);
   A('已领过不再发', streakBonus(3,[3])===null);

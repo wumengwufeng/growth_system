@@ -33,10 +33,11 @@ function migrate(s){
   if(typeof s.shieldsUsed!=='number') s.shieldsUsed=0;         // 累计消耗的枚数
   if(!Array.isArray(s.shieldedDays)) s.shieldedDays=[];        // 被护住的日期（YYYY-MM-DD）
   if(!Array.isArray(s.rankUps)) s.rankUps=[];
-  ensureMainQuest(s);          // 主线任务：老存档补一个默认主线，进度按历史完成数回填
-  if(s.mainQuest && s.mainQuest.progress===0 && s.stats && s.stats.done>0){
-    s.mainQuest.progress = Math.min(s.mainQuest.target, s.stats.done);
-  }
+  ensureMainQuest(s);          // 主线任务：老存档补一个默认主线
+  // 口径迁移：主线由「完成 N 个任务」改为「N 天有进展」。
+  // 按历史里每天的完成记录回填（不是按累计任务数 —— 那是这个 bug 的老根源：
+  // 每天发 2~3 个任务，12 天就能把「三十天筑基」刷满）。幂等，只在缺 activeDays 时执行。
+  backfillMainQuest(s.mainQuest, s.days);
   return s;
 }
 

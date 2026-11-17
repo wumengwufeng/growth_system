@@ -115,11 +115,13 @@ function renderMainQuest(){
   $('mqDesc').textContent = q.completed ? '已达成，系统记住了这段路。' : (q.desc||'');
   $('mqBar').style.width = pct+'%';
   $('mqNo').textContent = q.completed ? 'CLEARED' : 'MAIN QUEST';
-  $('mqProg').textContent = `${q.progress} / ${q.target}`;
+  // 口径是「有进展的天数」，单位必须写出来 —— 只写 30/30 会被读成任务数，
+  // 而用户真正在数的是天（22 天跑完「三十天筑基」就是这么被发现的）
+  $('mqProg').textContent = `${q.progress} / ${q.target} 天`;
   const next = (q.milestones||[]).filter(m=>!(q.doneMilestones||[]).includes(m));
   $('mqMile').textContent = q.completed
     ? `完成奖励已发放：EXP+${q.rewardExp} ◈+${q.rewardCoins}`
-    : (next.length ? `下一里程碑 ${next[0]}（还差 ${Math.max(0,next[0]-q.progress)} 个）` : '');
+    : (next.length ? `下一里程碑 ${next[0]} 天（还差 ${Math.max(0,next[0]-q.progress)} 天）` : '');
 }
 
 /* ── 今日赐福 ── */
@@ -738,7 +740,7 @@ async function runAction(act, b, e){
       q.doneMilestones=(q.doneMilestones||[]).filter(m=>m<=target);
       q.completed=q.progress>=target;
     }
-    log(`主线任务已设定：「${q.title}」，目标 ${q.target} 个任务。`,'up');
+    log(`主线任务已设定：「${q.title}」，目标累计 ${q.target} 天有进展。`,'up');
     save(); renderMainQuest(); toast('主线已更新','gold');
   }
   else if(act==='applyWindow'){
