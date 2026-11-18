@@ -211,6 +211,10 @@ label { font-size: 12.5px; font-weight: 550; color: var(--ink-muted); display: b
 .task-card.late { border-color: var(--warn); border-style: dashed; }
 .t-actions { display: flex; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); align-items: center; flex-wrap: wrap; }
 .note-in { flex: 1; min-width: 140px; padding: 5px 10px; font-size: 12.5px; }
+.note-wrap { flex: 1; min-width: 140px; position: relative; display: flex; }
+.note-wrap .note-in { flex: 1; padding-right: 64px; }
+.note-count { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 10.5px; color: var(--ink-faint); pointer-events: none; white-space: nowrap; }
+.note-count.low { color: var(--danger); }
 
 /* ── 商城 / 公告 ── */
 .shop-item { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px dashed var(--border); }
@@ -254,6 +258,34 @@ label { font-size: 12.5px; font-weight: 550; color: var(--ink-muted); display: b
 .curve-legend i { display: inline-block; width: 18px; height: 0; border-top: 2.5px solid; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
 .curve-hint { text-align: center; color: var(--ink-faint); font-size: 12.5px; padding: 30px 0; }
 .report p { font-size: 14px; line-height: 1.9; margin: 8px 0 0; }
+
+/* ── 周报正文（mdLite 渲染出来的一小套 Markdown）──
+   原来整份周报是一坨连排段落，AI 写的 ** 星号还直接露在屏幕上。
+   现在：小节标题带竖线、列表带项目符号、分隔线收尾，扫读比读墙舒服。 */
+.report-body { margin-top: 4px; }
+.report-body .md-h {
+  font-family: var(--font-display); font-size: 14px; font-weight: 700; color: var(--ink);
+  margin: 20px 0 4px; padding-left: 9px; line-height: 1.5; letter-spacing: .02em;
+  border-left: 3px solid var(--accent);
+}
+.report-body .md-h:first-child { margin-top: 8px; }
+.report-body .md-ul, .report-body .md-ol {
+  margin: 6px 0 0; padding-left: 20px; font-size: 13.5px; line-height: 1.85;
+}
+.report-body .md-ul li, .report-body .md-ol li { margin: 4px 0; }
+.report-body .md-ul li::marker, .report-body .md-ol li::marker { color: var(--accent); }
+.report-body .md-ol li::marker { font-family: var(--font-mono); font-weight: 600; }
+.report-body .md-hr { border: 0; border-top: 1px dashed var(--border-strong); margin: 18px 0 0; }
+.report-body strong { color: var(--ink); font-weight: 700; }
+.report-body code {
+  font-family: var(--font-mono); font-size: 12.5px;
+  background: var(--surface-tint); padding: 1px 5px; border-radius: 4px;
+}
+/* 复盘对话里的 Markdown：气泡内不放标题竖线，只把段落压紧 */
+.chat-txt p { margin: 0 0 6px; line-height: 1.75; }
+.chat-txt p:last-child { margin-bottom: 0; }
+.chat-txt .md-ul, .chat-txt .md-ol { margin: 4px 0 6px; padding-left: 18px; }
+.chat-txt .md-h { font-weight: 700; margin: 8px 0 3px; font-size: 13px; }
 
 /* ── 周报指标卡 ── */
 .rep-metrics { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; margin-bottom: 14px; }

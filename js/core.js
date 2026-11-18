@@ -751,28 +751,74 @@ function rescueInsight(rs, total){
 
 /* 无 AI 时的本地兜底周报：用真实数字拼一份，保证断网也有内容。
    刻意只依赖传入的指标对象 m（不读全局 S），保持 core 层纯函数可测。 */
+/* ── 极简 Markdown 渲染（周报 / 复盘对话共用）──
+   AI 输出的是 Markdown：**加粗**、## 小标题、- 列表。界面之前一律 esc(...)+<br>
+   当纯文本贴出来，屏幕上全是裸露的星号（用户 2026-11-17 反馈「周报格式需要优化」）。
+   只支持真正用得上的子集，且**先转义再做行内替换** —— 模型输出永远进不了标签。
+   放 core.js 而不是 ui.js：纯函数，才能被 selftest 直接覆盖。 */
+function mdLite(text){
+  const inline = t => esc(t)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const out = []; let list = null;   // 当前列表类型：'ul' | 'ol' | null
+  const closeList = () => { if(list){ out.push(`</${list}>`); list = null; } };
+  for(const raw of lines){
+    const line = raw.trim();
+    if(!line){ closeList(); continue; }          // 空行只负责断列表，不产出空段落
+    let m;
+    if(/^(-{3,}|\*{3,}|_{3,})$/.test(line)){ closeList(); out.push('<hr class="md-hr">'); continue; }
+    if((m = line.match(/^#{1,6}\s+(.*)$/))){ closeList(); out.push(`<h4 class="md-h">${inline(m[1])}</h4>`); continue; }
+    // 整行只有 **xxx**（AI 最爱的伪标题写法）→ 当小标题，别让一行加粗正文冒充段落
+    if((m = line.match(/^\*\*([^*]{1,40})\*\*\s*[:：]?$/))){ closeList(); out.push(`<h4 class="md-h">${esc(m[1])}</h4>`); continue; }
+    if((m = line.match(/^[-*•]\s+(.*)$/))){
+      if(list !== 'ul'){ closeList(); out.push('<ul class="md-ul">'); list = 'ul'; }
+      out.push(`<li>${inline(m[1])}</li>`); continue;
+    }
+    if((m = line.match(/^\d+[.)、]\s*(.*)$/))){
+      if(list !== 'ol'){ closeList(); out.push('<ol class="md-ol">'); list = 'ol'; }
+      out.push(`<li>${inline(m[1])}</li>`); continue;
+    }
+    closeList(); out.push(`<p>${inline(line)}</p>`);
+  }
+  closeList();
+  return out.join('');
+}
+
 function localReport(m){
-  const L=[];
   const r=m.cur, pr=m.prev;
   if(r.total===0){
-    return '这 7 天系统没有发出任何任务记录，成长档案是空白的。\n\n下一步：确认活跃窗口设置（设置页）符合你的作息，让系统能在你清醒的时段发布任务。';
+    return '这 7 天系统没有发出任何任务记录，成长档案是空白的。\n\n## 下一步\n- 确认活跃窗口（设置页）符合你的作息，让系统能在你清醒的时段发布任务\n- 窗口太窄会导致任务全挤在同一时段，错过就全错过';
   }
-  L.push(`整体评价：本周完成 ${r.done}/${r.total}（${r.rate}%），连续打卡 ${m.streak} 天，有效行动 ${r.activeDays} 天。` +
-    (pr.total? `对比上周 ${pr.rate}%，${m.rateDelta>0?'提升':m.rateDelta<0?'下降':'持平'} ${Math.abs(m.rateDelta)} 个百分点。` : '（上周无数据，暂无可比基线）'));
-  if(m.strongest) L.push(`亮点：${m.strongest} 维度投入最多（本周 ${r.byCat[m.strongest]} 次），维持住了主攻方向。`);
+  const L=[];
+  L.push('## 整体评价');
+  L.push(`- 本周期完成 **${r.done}/${r.total}**（${r.rate}%），连续打卡 **${m.streak}** 天，有效行动 ${r.activeDays} 天`);
+  L.push(pr.total
+    ? `- 对比上周 ${pr.rate}%，完成率${m.rateDelta>0?'上升':m.rateDelta<0?'下降':'持平'} **${Math.abs(m.rateDelta)}** 个百分点`
+    : '- 上周无任务记录，暂无可比基线');
+  if(m.strongest) L.push(`- 投入最多的维度是 **${m.strongest}**（${r.byCat[m.strongest]} 次），主攻方向守住了`);
   if(m.attrDelta){
     const up=Object.entries(m.attrDelta).filter(([,v])=>v>0).map(([k,v])=>`${k}+${v}`);
-    if(up.length) L.push(`属性增量：${up.join('、')}。`);
+    if(up.length) L.push(`- 属性增量：${up.join('、')}`);
   }
   const problems=[];
-  if(r.expired>0) problems.push(`${r.expired} 个任务失效`);
-  if(r.voided>0) problems.push(`${r.voided} 个突发任务被收回`);
-  if(r.partial>0) problems.push(`${r.partial} 个任务停在半奖状态未收尾`);
-  if(problems.length) L.push(`问题与盲区：${problems.join('，')}。`);
-  if(m.rescueInsight) L.push(`补救复盘：${m.rescueInsight.text}`);
+  if(r.expired>0) problems.push(`**${r.expired}** 个任务失效`);
+  if(r.voided>0) problems.push(`**${r.voided}** 个突发被收回`);
+  if(r.partial>0) problems.push(`**${r.partial}** 个停在半奖未收尾`);
+  if(problems.length){
+    L.push('## 问题与盲区');
+    for(const p of problems) L.push(`- ${p}`);
+  }
+  if(m.rescueInsight){
+    L.push('## 补救复盘');
+    L.push(`- ${m.rescueInsight.text}`);
+  }
   if(m.weakest){
     const v=m.weakestValue||0;
-    L.push(`下周建议：① 补强最薄弱的「${m.weakest}」（当前 ${v}，${attrRank(v)} 级），给它排 2-3 个任务；② 把每日第一个任务放在精力最好的时段，减少失效；③ 若常做同类任务，把它沉淀进任务池，减少出题随机性。`);
+    L.push('## 下周建议');
+    L.push(`1. **补强「${m.weakest}」**：当前 ${v}（${attrRank(v)} 级），给它排 2-3 个短任务`);
+    L.push('2. **把第一个任务放在精力最好的时段**：失效大多来自"没机会做"而不是"不想做"');
+    L.push('3. **同类任务沉淀进任务池**：减少出题随机性，也省得每次都从零想');
   }
   return L.join('\n');
 }
@@ -868,6 +914,21 @@ function selftest(){
     A('周报统计额度用光天数', wmR.cur.rescue.quotaDays===1, wmR.cur.rescue.quotaDays);
     A('周报带补救结论', !!wmR.rescueInsight&&typeof wmR.rescueInsight.text==='string');
     A('本地周报含补救复盘段', localReport(wmR).includes('补救复盘'));
+  // Markdown 轻渲染：AI 的 **加粗** / ## 小节 / - 列表必须变成标签，
+  // 不能再当纯文本贴出来（屏幕上全是裸露星号）
+  const md1=mdLite('**11-17 完成 0/1**，单日归零。');
+  A('mdLite 加粗成标签', md1.includes('<strong>11-17 完成 0/1</strong>')&&!md1.includes('**'), md1);
+  const md2=mdLite('**补救复盘**\n- 错过 9 次\n- 最长 1152 分钟');
+  A('mdLite 伪标题成小节', md2.includes('<h4 class="md-h">补救复盘</h4>'), md2);
+  A('mdLite 列表成 ul', md2.includes('<ul class="md-ul">')&&md2.split('<li>').length===3, md2);
+  const md3=mdLite('1. 补精神\n2. 补体质');
+  A('mdLite 有序列表成 ol', md3.includes('<ol class="md-ol">')&&md3.split('<li>').length===3, md3);
+  A('mdLite 段落包 p', mdLite('一句话')==='<p>一句话</p>', mdLite('一句话'));
+  A('mdLite 先转义再渲染',
+    mdLite('<script>alert(1)</script>')==='<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>',
+    mdLite('<script>alert(1)</script>'));
+  A('mdLite 分隔线', mdLite('---').includes('md-hr'));
+  A('本地周报可被 mdLite 渲染成小节', mdLite(localReport(wmR)).includes('md-h'), mdLite(localReport(wmR)).slice(0,60));
   }
   // 活跃窗口建议（诊断 → 修复）
   {

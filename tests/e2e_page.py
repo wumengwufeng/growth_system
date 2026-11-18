@@ -456,6 +456,58 @@ def main():
     au, _ = ev("(()=>{S.settings.theme='auto';const r=applyTheme();return r})()")
     A("auto 主题解析为 light/dark", au in ("light", "dark"), au)
 
+    # ── 桌面壳右键复制菜单（2026-11-18）：模拟 pywebview 环境驱动初始化 ──
+    ctx, _ = ev("""(async()=>{
+      try{
+        const out={};
+        // 浏览器里没有 pywebview → 菜单逻辑不应初始化（不拦 contextmenu）
+        out.browserSkip = !window.pywebview;
+        // 模拟壳：补上桥接对象后手动触发 ready 事件（真实壳里由 pywebview 注入时派发）
+        window.pywebview={};
+        window.dispatchEvent(new Event('pywebviewready'));
+        await new Promise(r=>setTimeout(r,50));
+        // 建立页面选区，然后派发右键事件
+        const p=document.querySelector('.t-desc')||document.body;
+        const range=document.createRange();
+        range.selectNodeContents(p);
+        const s=getSelection(); s.removeAllRanges(); s.addRange(range);
+        out.selected=getSelection().toString().slice(0,20);
+        const r=p.getBoundingClientRect();
+        p.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.left+5,clientY:r.top+5}));
+        const menu=document.querySelector('.ctx-menu');
+        out.menuShown=!!menu;
+        out.copyBtn=[...(menu?menu.querySelectorAll('button'):[])].map(b=>({t:b.textContent,dis:b.disabled}));
+        // 点「复制」→ clipboard 写入。无头环境会拒剪贴板权限（NotAllowedError），
+        // 用桩接住 writeText 的入参验证链路：菜单→点击→writeText(选区)→toast
+        const captured=[];
+        const orig=navigator.clipboard.writeText;
+        navigator.clipboard.writeText=t=>{captured.push(t); return Promise.resolve();};
+        const btn=[...menu.querySelectorAll('button')].find(b=>b.textContent==='复制');
+        btn.click();
+        await new Promise(r2=>setTimeout(r2,150));
+        navigator.clipboard.writeText=orig;
+        out.captured=captured[0]===undefined?null:captured[0].slice(0,20);
+        out.toastTxt=[...document.querySelectorAll('.toast')].map(t=>t.textContent).join('|');
+        out.menuClosed=!document.querySelector('.ctx-menu');
+        // 再验证：无选区右键不弹菜单（先确认上一个菜单已关）
+        getSelection().removeAllRanges();
+        document.body.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:10,clientY:10}));
+        out.noSelMenu=!!document.querySelector('.ctx-menu');
+        return JSON.stringify(out);
+      }catch(err){ return JSON.stringify({err:String(err), stack:(err&&err.stack||'').slice(0,300)}); }
+    })()""")
+    print("右键菜单诊断:", ctx)
+    cj = json.loads(ctx) if ctx else {}
+    if "err" in cj: print("右键菜单异常:", cj.get("err"), cj.get("stack"))
+    A("浏览器环境不初始化壳菜单", cj.get("browserSkip") is True, cj.get("browserSkip"))
+    A("模拟 pywebview 后菜单可初始化", cj.get("menuShown") is True, cj)
+    A("菜单含可用的复制项", any(b.get("t")=="复制" and not b.get("dis") for b in (cj.get("copyBtn") or [])), cj.get("copyBtn"))
+    A("点复制后 writeText 收到选区文本", isinstance(cj.get("captured"), str) and len(cj.get("captured")) > 0, cj.get("captured"))
+    A("复制后菜单关闭并出已复制 toast", cj.get("menuClosed") is True and "已复制" in (cj.get("toastTxt") or ""), cj.get("toastTxt"))
+    A("无选区右键不弹菜单", cj.get("noSelMenu") is False, cj.get("noSelMenu"))
+    # 还原：删掉模拟壳，避免影响后续用例
+    ev("delete window.pywebview; document.querySelectorAll('.ctx-menu').forEach(m=>m.remove()); true")
+
     # 分段推进按钮：造一个长任务 + 一个短任务，验证只有长任务出现该按钮
     diag, _ = ev("""(()=>{
       const t=new Date(); const k=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
@@ -493,6 +545,54 @@ def main():
     A("点击后任务进入 partial", fl.get("partial") is True, flow)
     A("卡片显示「已领半奖」徽标与「完成剩余」按钮", fl.get("remain") is True, fl)
     A("状态机里有 partial", "partial" in (fl.get("statuses") or []), fl.get("statuses"))
+
+    # ── 记录框：150 字上限 + 剩余字数提示（2026-11-18）──
+    nb, _ = ev("""(()=>{
+      try{
+      // 造一张干净的待办卡，不依赖上面 partial 流程留下的卡片状态
+      const t=new Date(); const k=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+      // issuedAt 往前挪 2 分钟：完成按钮有 60 秒冷却，刚发布的任务按钮是禁用态
+      S.days[k]={slots:[{at:600,kind:'side',status:'pending',task:{title:'记录框测试',desc:'',category:'智力',difficulty:1,minutes:10,kind:'side'},issuedAt:Date.now()-120e3,deadline:Date.now()+3600e3}]};
+      renderTasks();
+      const inp=document.querySelector('[data-note]');
+      if(!inp) return JSON.stringify({err:'noinput'});
+      const counter=document.querySelector('[data-note-count]');
+      const out={max:inp.maxLength, ph:inp.placeholder};
+      // 短文本：计数应隐藏
+      inp.focus(); inp.value='';
+      document.execCommand('insertText', false, ' abc');
+      inp.dispatchEvent(new Event('input',{bubbles:true}));
+      out.shortHidden=counter.hidden;
+      // execCommand 走浏览器真实编辑路径，maxlength 会像用户键入一样生效
+      inp.value=''; inp.focus();
+      document.execCommand('insertText', false, '记'.repeat(200));
+      inp.dispatchEvent(new Event('input',{bubbles:true}));
+      out.typedLen=inp.value.length;
+      out.fullText=counter.textContent;
+      out.fullLow=counter.classList.contains('low');
+      // 121 字 → 还剩 29：显示但未到标红线（<10 才红）
+      inp.value='记'.repeat(121); inp.dispatchEvent(new Event('input',{bubbles:true}));
+      out.midShown=!counter.hidden; out.midLow=counter.classList.contains('low'); out.midText=counter.textContent;
+      // 点完成前重新填满 150 字（上一步留的是 121 字的中间态），走完整链路：runAction 读框 → completeTask → 存档
+      inp.value='记'.repeat(150); inp.dispatchEvent(new Event('input',{bubbles:true}));
+      document.querySelector('[data-act="done"]').click();
+      const sl=S.days[k].slots[0];
+      out.savedLen=(sl.note||'').length;
+      out.savedPrefix=(sl.note||'')==='记'.repeat(150);
+      out.status=sl.status;
+      return JSON.stringify(out);
+      }catch(err){ return JSON.stringify({err:String(err), stack:(err&&err.stack||'').slice(0,300)}); }
+    })()""")
+    print("记录框诊断:", nb)
+    nbj = json.loads(nb) if nb else {}
+    A("记录框 maxlength=150", nbj.get("max") == 150, nbj)
+    A("placeholder 写明 150 字上限", "150" in (nbj.get("ph") or ""), nbj.get("ph"))
+    A("短文本时计数隐藏", nbj.get("shortHidden") is True, nbj)
+    A("键入 200 字被 maxlength 挡到 150", nbj.get("typedLen") == 150, nbj)
+    A("打满时提示还剩 0 字且标红", nbj.get("fullText") == "还剩 0 字" and nbj.get("fullLow") is True, nbj)
+    A("还剩 29 字时提示显示且不标红", nbj.get("midShown") is True and nbj.get("midLow") is False and nbj.get("midText") == "还剩 29 字", nbj)
+    A("完成后存档记录为 150 字前缀", nbj.get("savedLen") == 150 and nbj.get("savedPrefix") is True, nbj)
+    A("完成链路正常落账", nbj.get("status") == "done", nbj)
 
     # ── 系统流机制在真实页面里的渲染 ──
     A("主线任务卡片已渲染", bool(ev("document.getElementById('mqTitle').textContent")[0]))

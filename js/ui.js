@@ -189,7 +189,10 @@ function taskCard(sl, idx, dayStr){
       ${cd?`<span>${cd}</span>`:`<span>${st}</span>`}
     </div>
     ${liveStatus?`<div class="t-actions">
-      <input class="note-in" data-note placeholder="${sl.status==='partial'?'收尾记录（可选）':'一句话记录这次完成（可选）'}">
+      <div class="note-wrap">
+        <input class="note-in" data-note maxlength="150" placeholder="${sl.status==='partial'?'收尾记录（可选，最多 150 字）':'一句话记录这次完成（可选，最多 150 字）'}">
+        <span class="note-count" data-note-count hidden></span>
+      </div>
       ${doneBtn}
       ${splitBtn}
       <button class="btn btn-sm btn-quiet" data-act="abandon" data-day="${dayStr}" data-i="${idx}">放弃</button>
@@ -311,8 +314,10 @@ let reviewChat=[];         // {role:'user'|'assistant', text}
 function chatMessageHTML(m){
   const cls = m.role==='user' ? 'me' : (m.local ? 'sys error' : 'sys');
   const who = m.role==='user' ? '宿主' : '系统';
+  // 复盘对话同样是 AI 输出，也会带 **加粗** 和列表：走同一套 mdLite，
+  // 否则这里和周报一个渲染一个不渲染，看着像两套系统
   return `<div class="chat-msg ${cls}"><span class="who">${who}</span>
-    <span class="chat-txt">${esc(m.text).replace(/\n/g,'<br>')}</span></div>`;
+    <div class="chat-txt">${mdLite(m.text)}</div></div>`;
 }
 
 function renderReviewChat(){
@@ -487,7 +492,7 @@ function renderData(){
       ${srcTag}
       ${reportMetricsHTML(S.lastReport.metrics)}
       <div class="report"><span class="card-no">生成于 ${new Date(S.lastReport.t).toLocaleString('zh-CN',{hour12:false})}${stale?'':' · 有效期内'}</span>
-       <p>${esc(S.lastReport.text).replace(/\n/g,'<br>')}</p></div>`;
+       <div class="report-body">${mdLite(S.lastReport.text)}</div></div>`;
   }else{
     $('reportBox').innerHTML='<div class="curve-hint">还没有周报。点击下方按钮，让系统基于近 7 天数据做一次评估。</div>';
   }
@@ -710,7 +715,8 @@ function bindSettings(){
    e 只在 'done' 分支用于读输入框，因此允许传 null。 */
 async function runAction(act, b, e){
   if(act==='done'){
-    const note=b.parentElement?.querySelector('[data-note]')?.value.trim()||'';
+    // 从卡片层级找输入框，不能用 parentElement——note 外面还包着一层 .note-wrap
+    const note=b.closest('.task-card')?.querySelector('[data-note]')?.value.trim()||'';
     completeTask(b.dataset.day, +b.dataset.i, note);
   }
   else if(act==='abandon') abandonTask(b.dataset.day, +b.dataset.i);
@@ -867,6 +873,20 @@ document.addEventListener('click', async e=>{
   const b=e.target.closest('[data-act]'); if(!b) return;
   await runAction(b.dataset.act, b, e);
 });
+
+/* 记录框字数提示：input 事件会冒泡，挂在 document 上统一委托。
+   maxlength=150 已经挡住输入，计数只做「还剩多少」的提示。 */
+document.addEventListener('input', e=>{
+  const note=e.target.closest?.('[data-note]');
+  if(!note) return;
+  const wrap=note.closest('.note-wrap');
+  const counter=wrap?.querySelector('[data-note-count]');
+  if(!counter) return;
+  const left=Math.max(0,150-note.value.length);
+  counter.textContent=`还剩 ${left} 字`;
+  counter.hidden=left>=30;
+  counter.classList.toggle('low', left<10);
+});
 $('importFile').addEventListener('change', e=>{
   const f=e.target.files[0]; if(!f) return;
   const rd=new FileReader();
@@ -883,6 +903,90 @@ $('importFile').addEventListener('change', e=>{
 
 /* 引擎回调钩子 */
 window.UI={ toast, ding, renderAll, renderTasks, undo };
+
+/* ── 桌面壳（pywebview/WebView2）的自定义右键菜单 ──
+   壳里有两个限制：text_select=False 时注入 user-select:none（已在 pyw 开 True 解决）；
+   原生右键菜单只在 debug 模式开启（edgechromium.py: AreDefaultContextMenusEnabled=debug），
+   非调试模式下选中了也没有「复制」可点 → 这里自己画一个。
+   浏览器里 window.pywebview 不存在，整段跳过，保留原生菜单。 */
+(function setupShellContextMenu(){
+  function init(){
+    const css=document.createElement('style');
+    css.textContent=`
+      .ctx-menu { position: fixed; z-index: 90; min-width: 96px; padding: 4px;
+        background: var(--surface); border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm); box-shadow: var(--shadow-card); font-size: 12.5px; }
+      .ctx-menu button { display: block; width: 100%; padding: 6px 14px; border: 0;
+        background: none; text-align: left; cursor: pointer; border-radius: 6px;
+        font: inherit; color: var(--ink); }
+      .ctx-menu button:hover { background: var(--accent-soft); }
+      .ctx-menu button:disabled { color: var(--ink-faint); cursor: default; }
+      .ctx-menu button:disabled:hover { background: none; }`;
+    document.head.appendChild(css);
+
+    const sel=()=>window.getSelection().toString();
+    const nav=navigator.clipboard;
+    function menu(items, x, y){
+      close();
+      const m=document.createElement('div'); m.className='ctx-menu';
+      for(const it of items){
+        const b=document.createElement('button');
+        b.textContent=it.label; b.disabled=!it.ok;
+        if(it.ok) b.onclick=()=>{ close(); it.run(); };
+        m.appendChild(b);
+      }
+      document.body.appendChild(m);
+      // 贴边翻转：防止菜单溢出窗口右/下边缘被截断
+      const r=m.getBoundingClientRect();
+      m.style.left=Math.min(x, innerWidth-r.width-6)+'px';
+      m.style.top=Math.min(y, innerHeight-r.height-6)+'px';
+      cur=m;
+    }
+    let cur=null;
+    function close(){ if(cur){ cur.remove(); cur=null; } }
+    async function copy(t){
+      try{ await nav.writeText(t); toast('已复制','good'); }
+      catch(err){ toast('复制失败：'+err.message,'red'); }
+    }
+    // input/textarea 没有原生菜单可用，选区走 setSelectionRange，复制后还原焦点
+    function copyInput(inp){
+      const s=inp.selectionStart, e=inp.selectionEnd;
+      const t=s===e?inp.value:inp.value.slice(s,e);
+      copy(t).then(()=>{ inp.focus(); inp.setSelectionRange(s,e); });
+    }
+
+    document.addEventListener('contextmenu', e=>{
+      const acc=e.target.closest?.('input, textarea, [contenteditable]');
+      const hasSel=!!sel();
+      if(acc){
+        // 输入框：右键不该把页面选区当成它的内容
+        e.preventDefault();
+        const inp=acc;
+        menu([{label:'复制', ok: inp.selectionStart!==inp.selectionEnd || inp.value,
+               run:()=>copyInput(inp)},
+              {label:'全选', ok: !!inp.value,
+               run:()=>{ inp.focus(); inp.select(); }}], e.clientX, e.clientY);
+        return;
+      }
+      if(hasSel){
+        e.preventDefault();
+        menu([{label:'复制', ok:true, run:()=>copy(sel())}], e.clientX, e.clientY);
+      }
+      // 页面上没有选区也不弹空菜单：不 preventDefault，交给壳的默认行为（无菜单）
+    });
+    // 点菜单外关闭（capture 会在菜单按钮 onclick 之前触发，必须排除菜单自身，否则按钮还没响应就被删了）
+    document.addEventListener('click', e=>{ if(cur && !cur.contains(e.target)) close(); }, true);
+    ['scroll','blur','resize'].forEach(ev=>
+      document.addEventListener(ev, close, true));
+  }
+  // pywebview 注入桥接对象晚于页面脚本执行； ready 时才稳。
+  // addEventListener 做特征检测：无头沙箱（engine_smoke）的 window 桩没有它，模块加载不能炸
+  if(window.pywebview){
+    init();
+  } else if(window.addEventListener){
+    window.addEventListener('pywebviewready', init);
+  }
+})();
 
 /* ── 复盘对话：Enter 发送 + 网关离线时的本地降级回复 ──
    每轮请求的数字上下文每轮重算（见 ai.js 的 reviewContext），对话历史的职责

@@ -123,6 +123,21 @@ function makeSandbox({ now, save, fetchImpl } = {}) {
   A('重复完成不再发放（幂等）', after.coins === mid.coins && after.exp === mid.exp && after.done === mid.done);
 }
 
+/* ── 2b. 完成记录上限：150 字截断（2026-11-18 从 60 提到 150，界面同步 maxlength）── */
+{
+  const { ctx, ev } = makeSandbox({ now: () => new Date('2026-10-28T10:30:00').getTime() });
+  ev("BLESSINGS.length=0; BLESSINGS.push({id:'none',name:'无',desc:'',mult:{}});");
+  const S = ev('S');
+  S.days['2026-10-28'] = { slots: [{ at: 600, kind: 'side', status: 'pending', settledAt: 0,
+    task: { title: 'T', desc: 'd', category: '智力', difficulty: 2, minutes: 30, kind: 'side', rarity: 'common' },
+    issuedAt: Date.now() - 5*60e3, deadline: Date.now() + 3600e3 }] };
+  const long = '记'.repeat(200);
+  ev(`completeTask('2026-10-28', 0, ${JSON.stringify(long)})`);
+  const saved = S.days['2026-10-28'].slots[0].note || '';
+  A('200 字记录被截到 150 字', saved.length === 150, `实际 ${saved.length}`);
+  A('截断保留的是前缀', saved === long.slice(0, 150));
+}
+
 /* ── 3. 补交宽限：昨日刚过截止的任务应保留 pending，而不是立刻 expired ── */
 {
   const nowMs = new Date('2026-10-28T09:30:00').getTime();

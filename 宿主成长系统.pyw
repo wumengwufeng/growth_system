@@ -794,7 +794,9 @@ def main():
     log("启动：端口=%s 锁=%s 图标=%s" % (port, LOCK_PORT, os.path.exists(ICON_FILE)))
 
     window = webview.create_window("宿主成长系统", f"http://127.0.0.1:{port}",
-                                   width=1120, height=880, min_size=(760, 600), js_api=Api())
+                                   width=1120, height=880, min_size=(760, 600), js_api=Api(),
+                                   text_select=True)  # 允许选中/复制文字：False（默认）会注入 user-select:none，
+                                                      # 且 WebView2 后端只在 debug 模式给右键菜单，两头都堵死复制
     # 关窗收进托盘：走 pywebview 的 closing 事件，不再子类化窗口过程
     CloseToTray(state).attach(window)
     threading.Thread(target=serve_wakeups,

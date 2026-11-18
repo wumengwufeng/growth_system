@@ -197,7 +197,7 @@ function completeTask(dayStr, idx, note){
     const wasPartial = sl.status==='partial';
     sl.status='done';
     sl.settledAt=Date.now();
-    if(note) sl.note=String(note).slice(0,60);
+    if(note) sl.note=String(note).slice(0,150);
     const t=sl.task;
     const p=S.player;
 
